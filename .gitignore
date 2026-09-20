@@ -1,0 +1,43 @@
+# Python 缓存与环境
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# 运行结果、数据库、日志
+/var/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# 密钥及本地环境配置
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# 业务数据
+/data/
+*.csv
+*.xlsx
+*.xls
+*.parquet
+
+# 模型权重
+/model/
+/models/
+*.safetensors
+*.pt
+*.pth
+*.bin
+
+# 打包文件
+*.zip
+*.tar
+*.tar.gz

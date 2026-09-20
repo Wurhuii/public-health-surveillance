@@ -1,0 +1,51 @@
+{
+  "data_dir": "..",
+  "sources": {
+    "care_home": {
+      "file": "care_home_data_hubei_yichang.csv",
+      "enabled": true
+    },
+    "hospital": {
+      "file": "medical_data_hubei_yichang.csv",
+      "enabled": true
+    },
+    "school": {
+      "file": "school_symptom_processed.xlsx",
+      "enabled": false
+    }
+  },
+  "scenarios": {
+    "care_home": {"scope_type": "province", "freq": "week"},
+    "hospital": {"scope_type": "province", "freq": "week"},
+    "school": {"scope_type": "org", "freq": "day"}
+  },
+  "aggregation": {
+    "include_other": false
+  },
+  "supervisor": {
+    "default_autonomy_stage": 1,
+    "max_revision_rounds": 1,
+    "max_step_retries": 1,
+    "max_iterations": 32,
+    "retryable_steps": ["explain", "audit"]
+  },
+  "detection": {
+    "ewma": {"lambda": 0.3, "threshold": 3.0},
+    "cusum": {"k": 0.5, "h": 4.0},
+    "shewhart": {"threshold": 3.0},
+    "watch_ratio": 0.7,
+    "min_history": 4,
+    "merge_alarm_runs": true
+  },
+  "privacy": {
+    "hash_salt_env": "SURVEILLANCE_HASH_SALT",
+    "default_salt": "demo-only-change-me"
+  },
+  "llm": {
+    "mode": "off",
+    "base_url": "http://127.0.0.1:8002/v1",
+    "model": "local-model",
+    "api_key": ""
+  },
+  "model_version": "1.0.0"
+}

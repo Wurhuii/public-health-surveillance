@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "surveillance-agent"
+version = "0.1.0"
+description = "Provincial public health risk surveillance multi-agent system"
+requires-python = ">=3.9"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["surveillance_agent", "surveillance_agent.adapters", "surveillance_agent.models", "surveillance_agent.agent", "surveillance_agent.api"]

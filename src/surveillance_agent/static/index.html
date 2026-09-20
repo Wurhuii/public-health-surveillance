@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>省级公共卫生风险监测 - 风险展示</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; margin: 0; background: #f5f6f8; color: #1f2937; }
+  header { background: #1e3a5f; color: #fff; padding: 16px 24px; }
+  header h1 { margin: 0; font-size: 20px; }
+  .wrap { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
+  .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); padding: 16px 20px; margin-bottom: 16px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .metric { flex: 1; min-width: 160px; }
+  .metric .num { font-size: 28px; font-weight: 600; color: #1e3a5f; }
+  .metric .label { color: #6b7280; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; }
+  th { background: #f9fafb; color: #4b5563; }
+  .badge { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .high { background: #fee2e2; color: #b91c1c; }
+  .medium { background: #fef3c7; color: #b45309; }
+  .watch { background: #dbeafe; color: #1d4ed8; }
+  button { background: #1e3a5f; color: #fff; border: 0; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
+  button:hover { opacity: 0.9; }
+  .btn-sm { padding: 3px 10px; font-size: 12px; background: #eef2f7; color: #1e3a5f; }
+  td.expl { max-width: 380px; line-height: 1.5; }
+  tr.detail td { background: #f8fafc; padding: 12px 16px; }
+  .ev-grid { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 8px 24px; margin: 8px 0; }
+  .ev-item { font-size: 12px; }
+  .ev-item .k { color: #6b7280; }
+  .alarm-on { color: #b91c1c; font-weight: 600; }
+  .alarm-off { color: #9ca3af; }
+  .muted { color: #6b7280; font-size: 12px; }
+</style>
+</head>
+<body>
+<header><h1>省级公共卫生风险监测多 Agent 系统</h1></header>
+<div class="wrap">
+  <div class="card row" id="metrics"></div>
+  <div class="card">
+    <h3>风险信号 <span class="muted">（点击「证据」查看检测器分数/阈值/模型版本等）</span></h3>
+    <table id="risks">
+      <thead><tr><th>等级</th><th>来源</th><th>范围</th><th>症候群</th><th>时间</th><th>观察值</th><th>预期值</th><th>解释</th><th>证据</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h3>操作</h3>
+    <div class="row">
+      <button onclick="run(false)">运行(不注入)</button>
+      <button onclick="run(true)">运行(注入异常)</button>
+      <span id="status" style="color:#6b7280; align-self:center;"></span>
+    </div>
+  </div>
+</div>
+<script>
+function levelClass(l) { return l === 'high' ? 'high' : l === 'medium' ? 'medium' : 'watch'; }
+function levelLabel(l) { return l === 'high' ? '高' : l === 'medium' ? '中' : l === 'watch' ? '观察' : '正常'; }
+
+const DET_NAMES = ['ewma', 'cusum', 'shewhart'];
+const DET_LABELS = { ewma: 'EWMA', cusum: 'CUSUM', shewhart: 'Shewhart' };
+
+function evidenceHtml(x) {
+  const ev = x.evidence || {};
+  const scores = ev.scores || {};
+  const thresholds = ev.thresholds || {};
+  const alarms = ev.alarms || {};
+  const dets = DET_NAMES.map(n => {
+    const sc = scores[n];
+    const th = thresholds[n];
+    const al = alarms[n];
+    const alarmTxt = al === true
+      ? '<span class="alarm-on">告警</span>'
+      : (al === false ? '<span class="alarm-off">未告警</span>' : '<span class="muted">—</span>');
+    return `<div class="ev-item">
+      <span class="k">${DET_LABELS[n] || n}</span><br>
+      分数 <strong>${sc ?? '—'}</strong> &nbsp; 阈值 ${th ?? '—'}<br>
+      ${alarmTxt}
+    </div>`;
+  }).join('');
+  const ql = (ev.quality_limits || []).length ? (ev.quality_limits || []).join('；') : '无';
+  return `<div>
+    <div class="muted">signal_id: ${x.signal_id || '—'}</div>
+    <div class="ev-grid">${dets}</div>
+    <div class="ev-grid">
+      <div class="ev-item"><span class="k">模型版本</span><br>${ev.model_version || '—'}</div>
+      <div class="ev-item"><span class="k">质量限制</span><br>${ql}</div>
+      <div class="ev-item"><span class="k">需人工复核</span><br>${x.requires_human_review ? '是' : '否'}</div>
+    </div>
+  </div>`;
+}
+
+function toggleDetail(btn) {
+  const detail = btn.closest('tr').nextElementSibling;
+  if (detail && detail.classList.contains('detail')) {
+    const hidden = detail.style.display === 'none';
+    detail.style.display = hidden ? '' : 'none';
+    btn.textContent = hidden ? '收起' : '证据';
+  }
+}
+
+async function run(inject) {
+  const st = document.getElementById('status');
+  st.style.color = '#6b7280';
+  st.textContent = '运行中...（约 2-3 秒）';
+  try {
+    const r = await fetch('/api/runs', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ inject_outbreak: inject, injection_shape: 'gradual', injection_magnitude: 10 }) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    await load();
+    st.style.color = '#16a34a';
+    st.textContent = '运行完成: ' + data.run_id;
+  } catch (e) {
+    st.style.color = '#dc2626';
+    st.textContent = '运行失败: ' + e.message;
+  }
+}
+
+async function load() {
+  const [risksR, runsR, healthR] = await Promise.all([
+    fetch('/api/risks'), fetch('/api/runs'), fetch('/api/health')]);
+  const risks = await risksR.json();
+  const runs = await runsR.json();
+  const health = await healthR.json();
+  const rows = (risks.risks || []).slice(-50).reverse();
+  const tbody = document.querySelector('#risks tbody');
+  tbody.innerHTML = '';
+  rows.forEach(x => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><span class="badge ${levelClass(x.level)}">${levelLabel(x.level)}</span></td>
+      <td>${x.source || ''}</td><td>${x.scope_key || ''}</td><td>${x.syndrome || ''}</td>
+      <td>${x.date || ''}</td><td>${x.observed ?? ''}</td><td>${x.expected ?? ''}</td>
+      <td class="expl">${(x.explanation || '')}</td>
+      <td><button class="btn-sm" onclick="toggleDetail(this)">证据</button></td>`;
+    tbody.appendChild(tr);
+    const detail = document.createElement('tr');
+    detail.className = 'detail';
+    detail.style.display = 'none';
+    const td = document.createElement('td');
+    td.colSpan = 9;
+    td.innerHTML = evidenceHtml(x);
+    detail.appendChild(td);
+    tbody.appendChild(detail);
+  });
+  const latest = (runs.runs || [])[0];
+  const metrics = document.getElementById('metrics');
+  metrics.innerHTML = '';
+  const items = [
+    ['风险信号数', rows.length],
+    ['最近运行', latest ? latest.run_id : '-'],
+    ['健康检查', health.status || '-'],
+  ];
+  items.forEach(([label, num]) => {
+    const d = document.createElement('div');
+    d.className = 'metric';
+    d.innerHTML = `<div class="num">${num}</div><div class="label">${label}</div>`;
+    metrics.appendChild(d);
+  });
+}
+load();
+</script>
+</body>
+</html>
