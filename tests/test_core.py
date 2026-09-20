@@ -176,6 +176,42 @@ class TestExplanation(unittest.TestCase):
         self.assertIn("latency_ms", draft)
         self.assertGreaterEqual(draft["latency_ms"], 0)
 
+    def test_llm_explain_rebuilds_claims_from_evidence(self):
+        import surveillance_agent.agent.explanation as explanation_mod
+
+        def fake_llm(prompt):
+            return '{"text": "监测数据出现变化，建议继续观察。", "claims": []}'
+
+        original = explanation_mod.get_llm
+        explanation_mod.get_llm = lambda: fake_llm
+        try:
+            draft = explanation_mod.llm_explain(self._evidence())
+        finally:
+            explanation_mod.get_llm = original
+        self.assertEqual(draft["draft_source"], "llm")
+        self.assertEqual([c["field"] for c in draft["claims"]], ["observed", "expected", "syndrome", "date"])
+        ok, errors = validate_draft(draft, self._evidence())
+        self.assertTrue(ok, errors)
+
+    def test_llm_prompt_contains_real_values_not_placeholders(self):
+        import surveillance_agent.agent.explanation as explanation_mod
+
+        captured = {}
+
+        def fake_llm(prompt):
+            captured["prompt"] = prompt
+            return '{"text": "监测值高于预期，建议继续观察。"}'
+
+        original = explanation_mod.get_llm
+        explanation_mod.get_llm = lambda: fake_llm
+        try:
+            draft = explanation_mod.llm_explain(self._evidence())
+        finally:
+            explanation_mod.get_llm = original
+        self.assertEqual(draft["draft_source"], "llm")
+        self.assertNotIn('"value": 数字', captured["prompt"])
+        self.assertIn('"value": 12.0', captured["prompt"])
+
     def test_forged_number_rejected(self):
         ev = self._evidence()
         draft = template_explain(ev)
