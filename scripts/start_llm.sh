@@ -150,7 +150,7 @@ PY
   printf '%s\n' "$PORT" > var/llm_port.txt
 }
 
-if api_ready; then
+if [ "${LLM_FORCE_PORT:-0}" != "1" ] && api_ready; then
   write_runtime
   echo "[start_llm] 服务已就绪: ${BASE_URL}（backend=${BACKEND}）"
   exit 0

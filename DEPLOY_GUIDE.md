@@ -53,6 +53,9 @@ bash scripts/start_llm.sh 8002
 # 明确选择 vLLM（连续批处理，并发解释时吞吐量更高）
 LLM_BACKEND=vllm bash scripts/start_llm.sh 8002
 
+# 8002 已运行旧服务，需要切换后端时强制重启
+LLM_FORCE_PORT=1 LLM_BACKEND=vllm bash scripts/start_llm.sh 8002
+
 # 明确使用项目自带 Transformers 服务
 LLM_BACKEND=transformers bash scripts/start_llm.sh 8002
 
