@@ -277,6 +277,12 @@ class TestEndToEnd(unittest.TestCase):
 
 
 class TestImprovements(unittest.TestCase):
+    def test_cli_formats_total_elapsed_time(self):
+        from surveillance_agent.cli import _format_elapsed
+
+        self.assertEqual(_format_elapsed(0), "00:00:00.0 (0.0 秒)")
+        self.assertEqual(_format_elapsed(3661.25), "01:01:01.2 (3661.2 秒)")
+
     def test_cusum_resets_after_alarm(self):
         from surveillance_agent.models.detectors import CUSUM
 

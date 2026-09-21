@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 
 
 def _reconfigure_stdout() -> None:
@@ -12,7 +13,14 @@ def _reconfigure_stdout() -> None:
         pass
 
 
-def _print_result(coordinator, result) -> None:
+def _format_elapsed(seconds: float) -> str:
+    seconds = max(0.0, float(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{int(hours):02d}:{int(minutes):02d}:{secs:04.1f} ({seconds:.1f} 秒)"
+
+
+def _print_result(coordinator, result, elapsed_seconds: float = None) -> None:
     summary = result.get("summary", {})
     print("=" * 60)
     print("  省级公共卫生风险监测多 Agent 系统 - 运行完成")
@@ -44,10 +52,13 @@ def _print_result(coordinator, result) -> None:
                     break
     print(f"  自主性阶段:      {summary.get('autonomy_stage', '')}")
     print(f"  LangGraph模式:   {summary.get('use_langgraph', False)}")
+    if elapsed_seconds is not None:
+        print(f"  整个流程耗时:    {_format_elapsed(elapsed_seconds)}")
     print("=" * 60)
 
 
 def cmd_run(args) -> None:
+    started_at = time.monotonic()
     from .agent import MultiAgentCoordinator, run_with_langgraph
     from .config import load_config
 
@@ -67,7 +78,7 @@ def cmd_run(args) -> None:
     else:
         result = coordinator.run(inject=args.inject, shape=args.shape, magnitude=args.magnitude)
 
-    _print_result(coordinator, result)
+    _print_result(coordinator, result, time.monotonic() - started_at)
 
 
 def cmd_serve(args) -> None:
@@ -80,6 +91,7 @@ def cmd_serve(args) -> None:
 
 
 def cmd_experiment(args) -> None:
+    started_at = time.monotonic()
     import json
 
     from .config import PROJECT_ROOT
@@ -91,6 +103,7 @@ def cmd_experiment(args) -> None:
     summary = result.get("summary", result)
     print(f"[{args.rq}] 完成，结果写入: {output}")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    print(f"[{args.rq}] 整个实验耗时: {_format_elapsed(time.monotonic() - started_at)}")
 
 
 def main(argv=None) -> None:
