@@ -464,6 +464,7 @@ class MultiAgentCoordinator:
             ok, errors = validate_draft(draft, sig.evidence)
             text = draft.get("text", "")
             used_fallback = False
+            explanation_source = draft.get("draft_source", "template")
             if not ok:
                 rejected.append(signal_id)
                 fallback = template_explain(sig.evidence, sig.level)
@@ -473,6 +474,7 @@ class MultiAgentCoordinator:
                     ok = True
                     errors = []
                     used_fallback = True
+                    explanation_source = "template_fallback"
                     rejected = [r for r in rejected if r != signal_id]
             results.append(
                 {
@@ -482,6 +484,7 @@ class MultiAgentCoordinator:
                     "text": text,
                     "used_fallback": used_fallback,
                     "draft_source": draft.get("draft_source", ""),
+                    "explanation_source": explanation_source,
                 }
             )
 
@@ -489,6 +492,7 @@ class MultiAgentCoordinator:
             for r in results:
                 if r["signal_id"] == sig.signal_id:
                     sig.explanation = r["text"] if r["passed"] else ""
+                    sig.explanation_source = r["explanation_source"] if r["passed"] else "human_review"
 
         self.state["explanations"] = results
         write_json(str(self.run_dir / "explanations.json"), results)
@@ -504,6 +508,7 @@ class MultiAgentCoordinator:
             draft = template_explain(sig.evidence, sig.level)
             ok, _ = validate_draft(draft, sig.evidence)
             sig.explanation = draft["text"] if ok else ""
+            sig.explanation_source = "template_revision" if ok else "human_review"
             drafts.append(draft)
         self.state["explanation_drafts"] = drafts
         write_json(str(self.run_dir / "explanation_drafts.json"), drafts)

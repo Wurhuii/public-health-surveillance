@@ -298,6 +298,19 @@ class TestEndToEnd(unittest.TestCase):
         self.assertTrue(result["summary"]["use_langgraph"] is False)
         self.assertIn("explain", result["summary"]["node_times"])
         self.assertGreaterEqual(result["summary"]["node_times"]["explain"]["total_seconds"], 0)
+        self.assertTrue(all(signal.explanation for signal in result["risk_signals"]))
+        self.assertTrue(all(signal.explanation_source for signal in result["risk_signals"]))
+
+        from surveillance_agent.storage import Storage
+
+        storage = Storage(str(coord.run_dir.parent.parent / "surveillance.db"))
+        try:
+            saved = storage.query_signals(result["run_id"])
+        finally:
+            storage.close()
+        self.assertEqual(len(saved), len(result["risk_signals"]))
+        self.assertTrue(all(row["explanation"] for row in saved))
+        self.assertTrue(all(row["explanation_source"] for row in saved))
 
     def test_messages_correlated(self):
         from surveillance_agent.utils import read_jsonl
@@ -389,6 +402,7 @@ class TestImprovements(unittest.TestCase):
         self.assertEqual(result["rejected"], [])
         for sig in coord.state["risk_signals"]:
             self.assertTrue(sig.explanation, "fallback explanation should be written back")
+            self.assertEqual(sig.explanation_source, "template_fallback")
 
     def test_adaptive_model_selection(self):
         from surveillance_agent.agent.model_policy import select_models
@@ -414,6 +428,8 @@ class TestImprovements(unittest.TestCase):
         )
         self.assertNotIn("fetch('/api/", html)
         self.assertIn("fetch('api/runs'", html)
+        self.assertIn("function explanationHtml", html)
+        self.assertIn("escapeHtml(visibleText)", html)
 
     def test_extract_json_from_llm_output(self):
         from surveillance_agent.agent.llm import extract_json

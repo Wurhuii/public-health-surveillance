@@ -130,6 +130,7 @@ def llm_explain_many(items: List[Tuple[RiskEvidence, str]]) -> List[Dict[str, An
 
 def _fallback_with_latency(evidence: RiskEvidence, level: str, latency_ms: float, raw: str = None) -> Dict[str, Any]:
     draft = template_explain(evidence, level)
+    draft["draft_source"] = "template_fallback"
     if latency_ms is not None:
         draft["latency_ms"] = latency_ms
     if raw is not None:
