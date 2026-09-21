@@ -464,7 +464,7 @@ $env:SURVEILLANCE_LLM_API_KEY = ""
 - **`pyproject.toml` 打包不完整**：`packages` 缺少 `surveillance_agent.research`，且 `static/` 与 `config/` 未声明为包数据 → 按 README §8.3 离线 `pip install -e .` 后，`experiment rq*` 会失败、`serve` 页面 404（平台 demo 用 `PYTHONPATH=src` 直接跑，暂未受影响）。
 - **`run_id` 秒级粒度**（`orchestrator.py`）：同一秒内并发运行会撞 ID，SQLite `INSERT OR REPLACE` 互相覆盖；API `POST /api/runs` 无并发保护。
 - **API 无鉴权/限流/输入校验**：`shape`、`magnitude`、`autonomy_stage` 接受任意值，`POST /api/runs` 同步阻塞线程。
-- **LLM 并发取决于后端**：客户端支持可配置并发；vLLM/MindIE 可进行连续批处理。项目自带的 Transformers 服务仍按串行推理运行，启动脚本会把其并发数设为 1。
+- **LLM 支持并发与批量推理**：vLLM/MindIE 通过并发请求进行连续批处理；项目自带的 Transformers 服务提供 `/v1/chat/completions/batch`，默认每批 4 条，减少逐条生成带来的线性等待。
 - **LLM 输出依赖模型能力**：提示词要求"只输出 JSON"，`extract_json` 已容错，但 1.5B 模型偶发输出不合规仍会回退模板；RQ4 的 `grounded_llm`/`ungrounded_llm` 目前仍只是状态占位，未真正执行 LLM 对照实验。
 - **LLM 运行依赖平台环境**：`llm_server.py` 需要平台已装 transformers/torch/torch_npu；本机（Windows 开发环境）未装则无法本地跑通模型服务。
 - **无日志框架**：全用 `print`/`write_json`，缺少统一结构化日志。

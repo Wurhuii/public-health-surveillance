@@ -76,8 +76,6 @@ else
 fi
 if [ -n "${LLM_CONCURRENCY:-}" ]; then
   CONCURRENCY="$LLM_CONCURRENCY"
-elif [ "$BACKEND" = "transformers" ]; then
-  CONCURRENCY=1
 else
   CONCURRENCY=4
 fi

@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Tuple
 
 from ..domain import RiskEvidence
-from .llm import extract_json, get_llm, get_llm_settings
+from .llm import extract_json, get_llm, get_llm_batch, get_llm_settings
 
 FORBIDDEN_PHRASES = ["已经暴发", "确诊为", "证实暴发", "确定为暴发", "疫情暴发", "已暴发"]
 
@@ -38,16 +38,12 @@ def template_explain(evidence: RiskEvidence, level: str = "") -> Dict[str, Any]:
     return {"signal_id": evidence.signal_id, "text": text, "claims": claims, "draft_source": "template"}
 
 
-def llm_explain(evidence: RiskEvidence, level: str = "", llm=None) -> Dict[str, Any]:
-    llm = llm or get_llm()
-    if llm is None:
-        return template_explain(evidence, level)
-    t0 = time.monotonic()
+def _explanation_prompt(evidence: RiskEvidence) -> str:
     example_text = (
         f"{evidence.scope_key}的{evidence.syndrome}症候群在{evidence.date}的监测值为"
         f"{evidence.observed}，预期值为{evidence.expected}，建议结合持续监测结果评估风险。"
     )
-    prompt = (
+    return (
         "你是一个公共卫生风险预警解释器。请严格基于给定证据生成解释，"
         "只能陈述证据内的事实，不得使用'已经暴发''确诊为'等确定性结论。\n"
         f"证据: {json.dumps(evidence.to_dict(), ensure_ascii=False)}\n"
@@ -56,24 +52,37 @@ def llm_explain(evidence: RiskEvidence, level: str = "", llm=None) -> Dict[str, 
         "不要添加证据中不存在的数字。结构化 claims 将由程序从证据生成，无需模型重复输出。输出示例：\n"
         f"{json.dumps({'text': example_text}, ensure_ascii=False)}"
     )
+
+
+def _draft_from_output(
+    evidence: RiskEvidence,
+    level: str,
+    result: str,
+    latency_ms: float,
+) -> Dict[str, Any]:
+    obj = extract_json(result)
+    if not isinstance(obj, dict) or not isinstance(obj.get("text"), str) or not obj["text"].strip():
+        return _fallback_with_latency(evidence, level, latency_ms, raw=result)
+    obj["text"] = obj["text"].strip()
+    obj["claims"] = _evidence_claims(evidence)
+    obj["signal_id"] = evidence.signal_id
+    obj["draft_source"] = "llm"
+    obj["latency_ms"] = latency_ms
+    return obj
+
+
+def llm_explain(evidence: RiskEvidence, level: str = "", llm=None) -> Dict[str, Any]:
+    llm = llm or get_llm()
+    if llm is None:
+        return template_explain(evidence, level)
+    t0 = time.monotonic()
     latency_ms = None
     raw = None
     try:
-        result = llm(prompt)
+        result = llm(_explanation_prompt(evidence))
         latency_ms = round((time.monotonic() - t0) * 1000, 1)
         raw = result
-        obj = extract_json(result)
-        if not isinstance(obj, dict) or not isinstance(obj.get("text"), str) or not obj["text"].strip():
-            return _fallback_with_latency(evidence, level, latency_ms, raw=raw)
-        # Claims are a machine-readable projection of RiskEvidence. Rebuilding
-        # them prevents copied placeholders or formatting mistakes from turning
-        # an otherwise useful explanation into a parse failure.
-        obj["text"] = obj["text"].strip()
-        obj["claims"] = _evidence_claims(evidence)
-        obj["signal_id"] = evidence.signal_id
-        obj["draft_source"] = "llm"
-        obj["latency_ms"] = latency_ms
-        return obj
+        return _draft_from_output(evidence, level, result, latency_ms)
     except Exception:
         if latency_ms is None:
             latency_ms = round((time.monotonic() - t0) * 1000, 1)
@@ -84,8 +93,7 @@ def llm_explain_many(items: List[Tuple[RiskEvidence, str]]) -> List[Dict[str, An
     """Generate explanations concurrently while preserving signal order.
 
     vLLM and MindIE can continuously batch these independent requests. The
-    bundled Transformers server accepts the same calls but processes them
-    serially, so this remains compatible with the fallback backend.
+    bundled Transformers server uses its native batched generation endpoint.
     """
     if not items:
         return []
@@ -94,6 +102,26 @@ def llm_explain_many(items: List[Tuple[RiskEvidence, str]]) -> List[Dict[str, An
         return [template_explain(evidence, level) for evidence, level in items]
     settings = get_llm_settings() or {}
     workers = min(max(1, int(settings.get("concurrency", 1))), len(items))
+    batch_llm = get_llm_batch()
+    if batch_llm is not None and workers > 1:
+        drafts = []
+        for offset in range(0, len(items), workers):
+            chunk = items[offset : offset + workers]
+            started = time.monotonic()
+            try:
+                outputs = batch_llm([_explanation_prompt(evidence) for evidence, _ in chunk])
+                latency_ms = round((time.monotonic() - started) * 1000, 1)
+                drafts.extend(
+                    _draft_from_output(evidence, level, output, latency_ms)
+                    for (evidence, level), output in zip(chunk, outputs)
+                )
+            except Exception:
+                latency_ms = round((time.monotonic() - started) * 1000, 1)
+                drafts.extend(
+                    _fallback_with_latency(evidence, level, latency_ms)
+                    for evidence, level in chunk
+                )
+        return drafts
     if workers == 1:
         return [llm_explain(evidence, level, llm=llm) for evidence, level in items]
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="llm-explain") as pool:

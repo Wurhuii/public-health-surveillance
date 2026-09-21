@@ -7,7 +7,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 from ..config import PROJECT_ROOT, load_config
 
@@ -83,6 +83,57 @@ def get_llm() -> Optional[Callable[[str], str]]:
                 last_err = exc
                 time.sleep(1 + attempt)
         raise RuntimeError(f"LLM call failed after {settings['retries']} attempts -> {last_err}")
+
+    return _call
+
+
+def get_llm_batch() -> Optional[Callable[[List[str]], List[str]]]:
+    """Return the bundled server's native batch client when available."""
+    settings = get_llm_settings()
+    if settings is None or settings.get("backend") != "transformers":
+        return None
+    base_url = settings["base_url"]
+    api_key = settings["api_key"]
+
+    def _call(prompts: List[str]) -> List[str]:
+        if not prompts:
+            return []
+        url = base_url.rstrip("/") + "/chat/completions/batch"
+        request_body = {
+            "requests": [
+                {
+                    "model": settings["model"],
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": settings["temperature"],
+                    "max_tokens": settings["max_tokens"],
+                }
+                for prompt in prompts
+            ]
+        }
+        last_err = None
+        for attempt in range(settings["retries"]):
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(request_body).encode("utf-8"),
+                method="POST",
+            )
+            req.add_header("Content-Type", "application/json")
+            if api_key:
+                req.add_header("Authorization", f"Bearer {api_key}")
+            try:
+                with urllib.request.urlopen(req, timeout=settings["timeout"]) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
+                outputs = result.get("outputs")
+                if not isinstance(outputs, list) or len(outputs) != len(prompts):
+                    raise ValueError("invalid batch response")
+                return [str(output) for output in outputs]
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", "replace")[:500]
+                last_err = f"HTTP {exc.code}: {detail}"
+            except Exception as exc:
+                last_err = exc
+            time.sleep(1 + attempt)
+        raise RuntimeError(f"LLM batch call failed after {settings['retries']} attempts -> {last_err}")
 
     return _call
 

@@ -111,6 +111,9 @@ def main() -> None:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
     if device in ("cuda", "npu"):
         try:
             model = AutoModelForCausalLM.from_pretrained(model_dir, trust_remote_code=True, torch_dtype=torch.bfloat16)
@@ -130,11 +133,42 @@ def main() -> None:
 
     @app.get("/health")
     def health():
-        return {"status": "ok", "model": model_name}
+        return {"status": "ok", "model": model_name, "backend": "transformers", "batch": True}
 
     @app.get("/v1/models")
     def list_models():
         return {"object": "list", "data": [{"id": model_name, "object": "model"}]}
+
+    def generate_batch(message_batches, max_new: int, temperature: float):
+        prompts = [
+            tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            for messages in message_batches
+        ]
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(model.device)
+        with torch.inference_mode():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=max_new,
+                temperature=temperature,
+                do_sample=(temperature > 0.0),
+                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+            )
+        input_width = int(inputs.input_ids.shape[1])
+        texts = []
+        usages = []
+        for index, output in enumerate(outputs):
+            new_tokens = output[input_width:]
+            texts.append(tokenizer.decode(new_tokens, skip_special_tokens=True))
+            prompt_len = int(inputs.attention_mask[index].sum().item())
+            comp_len = int(new_tokens.shape[0])
+            usages.append(
+                {
+                    "prompt_tokens": prompt_len,
+                    "completion_tokens": comp_len,
+                    "total_tokens": prompt_len + comp_len,
+                }
+            )
+        return texts, usages
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request):
@@ -144,21 +178,7 @@ def main() -> None:
             return JSONResponse({"error": "empty messages"}, status_code=400)
         max_new = int(body.get("max_tokens") or args.max_new_tokens)
         temperature = float(body.get("temperature", args.temperature))
-
-        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        with torch.inference_mode():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=max_new,
-                temperature=temperature,
-                do_sample=(temperature > 0.0),
-                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-            )
-        new_tokens = outputs[0][inputs.input_ids.shape[1]:]
-        text = tokenizer.decode(new_tokens, skip_special_tokens=True)
-        prompt_len = int(inputs.input_ids.shape[1])
-        comp_len = int(new_tokens.shape[0])
+        texts, usages = generate_batch([messages], max_new, temperature)
         return {
             "id": "chatcmpl-" + str(int(time.time() * 1000)),
             "object": "chat.completion",
@@ -167,16 +187,30 @@ def main() -> None:
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": text},
+                    "message": {"role": "assistant", "content": texts[0]},
                     "finish_reason": "stop",
                 }
             ],
-            "usage": {
-                "prompt_tokens": prompt_len,
-                "completion_tokens": comp_len,
-                "total_tokens": prompt_len + comp_len,
-            },
+            "usage": usages[0],
         }
+
+    @app.post("/v1/chat/completions/batch")
+    async def batch_chat_completions(request: Request):
+        body = await request.json()
+        requests = body.get("requests", [])
+        if not isinstance(requests, list) or not requests:
+            return JSONResponse({"error": "empty requests"}, status_code=400)
+        if len(requests) > 16:
+            return JSONResponse({"error": "batch too large; maximum is 16"}, status_code=400)
+        message_batches = [item.get("messages", []) for item in requests]
+        if any(not messages for messages in message_batches):
+            return JSONResponse({"error": "empty messages in batch"}, status_code=400)
+        max_new = max(int(item.get("max_tokens") or args.max_new_tokens) for item in requests)
+        temperatures = [float(item.get("temperature", args.temperature)) for item in requests]
+        if len(set(temperatures)) != 1:
+            return JSONResponse({"error": "all batch temperatures must match"}, status_code=400)
+        texts, usages = generate_batch(message_batches, max_new, temperatures[0])
+        return {"object": "chat.completion.batch", "outputs": texts, "usage": usages}
 
     import uvicorn
 

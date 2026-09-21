@@ -217,6 +217,33 @@ class TestExplanation(unittest.TestCase):
         self.assertEqual(len(drafts), 2)
         self.assertTrue(all(draft["draft_source"] == "llm" for draft in drafts))
 
+    def test_llm_explain_many_uses_transformers_batch_endpoint(self):
+        import surveillance_agent.agent.explanation as explanation_mod
+
+        calls = []
+
+        def fake_batch(prompts):
+            calls.append(len(prompts))
+            return ['{"text": "批量解释。"}' for _ in prompts]
+
+        original_llm = explanation_mod.get_llm
+        original_batch = explanation_mod.get_llm_batch
+        original_settings = explanation_mod.get_llm_settings
+        explanation_mod.get_llm = lambda: (lambda prompt: '{"text": "单条解释。"}')
+        explanation_mod.get_llm_batch = lambda: fake_batch
+        explanation_mod.get_llm_settings = lambda: {"backend": "transformers", "concurrency": 2}
+        try:
+            drafts = explanation_mod.llm_explain_many(
+                [(self._evidence(), "high") for _ in range(5)]
+            )
+        finally:
+            explanation_mod.get_llm = original_llm
+            explanation_mod.get_llm_batch = original_batch
+            explanation_mod.get_llm_settings = original_settings
+        self.assertEqual(calls, [2, 2, 1])
+        self.assertEqual(len(drafts), 5)
+        self.assertTrue(all(draft["draft_source"] == "llm" for draft in drafts))
+
     def test_llm_prompt_contains_real_values_not_placeholders(self):
         import surveillance_agent.agent.explanation as explanation_mod
 

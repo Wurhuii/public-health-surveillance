@@ -50,7 +50,7 @@
     "max_tokens": 256,
     "timeout": 120,
     "retries": 2,
-    "concurrency": 1
+    "concurrency": 4
   },
   "model_version": "1.0.0"
 }

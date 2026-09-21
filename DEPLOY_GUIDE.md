@@ -66,8 +66,12 @@ bash scripts/start_llm.sh
 ```
 
 默认模型目录是 `/data/home/6120260064/model/Qwen2.5-1.5B-Instruct`。更换模型时设置
-`LLM_MODEL_DIR` 和 `LLM_MODEL_NAME`。并发数默认是 4，可通过 `LLM_CONCURRENCY` 调整；
+`LLM_MODEL_DIR` 和 `LLM_MODEL_NAME`。批量/并发数默认是 4，可通过 `LLM_CONCURRENCY` 调整；
 推荐先测试 4，再根据 NPU 内存和吞吐量测试 8。
+
+vLLM/MindIE 会把并发 HTTP 请求交给推理引擎连续批处理。项目自带的 Transformers
+服务则使用 `/v1/chat/completions/batch`，一次 `model.generate` 同时处理多条解释，
+所以即使服务器尚未安装 vLLM，也不再逐条执行 47 次推理。
 
 vLLM 后端需要预先安装与服务器 CANN、PyTorch 和 Python 版本匹配的
 `vllm`/`vllm-ascend`。这些组件版本必须配套，因此脚本只检查，不自动在线安装。
