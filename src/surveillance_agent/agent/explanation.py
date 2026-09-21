@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Tuple
 
 from ..domain import RiskEvidence
-from .llm import extract_json, get_llm
+from .llm import extract_json, get_llm, get_llm_settings
 
 FORBIDDEN_PHRASES = ["已经暴发", "确诊为", "证实暴发", "确定为暴发", "疫情暴发", "已暴发"]
 
@@ -37,26 +38,23 @@ def template_explain(evidence: RiskEvidence, level: str = "") -> Dict[str, Any]:
     return {"signal_id": evidence.signal_id, "text": text, "claims": claims, "draft_source": "template"}
 
 
-def llm_explain(evidence: RiskEvidence, level: str = "") -> Dict[str, Any]:
-    llm = get_llm()
+def llm_explain(evidence: RiskEvidence, level: str = "", llm=None) -> Dict[str, Any]:
+    llm = llm or get_llm()
     if llm is None:
         return template_explain(evidence, level)
     t0 = time.monotonic()
-    required_output = {
-        "text": (
-            f"{evidence.scope_key}的{evidence.syndrome}症候群在{evidence.date}的监测值为"
-            f"{evidence.observed}，预期值为{evidence.expected}，建议结合持续监测结果评估风险。"
-        ),
-        "claims": _evidence_claims(evidence),
-    }
+    example_text = (
+        f"{evidence.scope_key}的{evidence.syndrome}症候群在{evidence.date}的监测值为"
+        f"{evidence.observed}，预期值为{evidence.expected}，建议结合持续监测结果评估风险。"
+    )
     prompt = (
         "你是一个公共卫生风险预警解释器。请严格基于给定证据生成解释，"
         "只能陈述证据内的事实，不得使用'已经暴发''确诊为'等确定性结论。\n"
         f"证据: {json.dumps(evidence.to_dict(), ensure_ascii=False)}\n"
         "只输出一个 JSON 对象，不要输出任何其他文字、解释或代码围栏，"
-        "不要以'好的''以下是'等开头。必须保留示例中的 claims 字段和值，"
-        "只改写 text，且不要添加证据中不存在的数字。输出示例：\n"
-        f"{json.dumps(required_output, ensure_ascii=False)}"
+        "不要以'好的''以下是'等开头。只返回 text 字段，保持一句话，"
+        "不要添加证据中不存在的数字。结构化 claims 将由程序从证据生成，无需模型重复输出。输出示例：\n"
+        f"{json.dumps({'text': example_text}, ensure_ascii=False)}"
     )
     latency_ms = None
     raw = None
@@ -80,6 +78,26 @@ def llm_explain(evidence: RiskEvidence, level: str = "") -> Dict[str, Any]:
         if latency_ms is None:
             latency_ms = round((time.monotonic() - t0) * 1000, 1)
         return _fallback_with_latency(evidence, level, latency_ms, raw=raw)
+
+
+def llm_explain_many(items: List[Tuple[RiskEvidence, str]]) -> List[Dict[str, Any]]:
+    """Generate explanations concurrently while preserving signal order.
+
+    vLLM and MindIE can continuously batch these independent requests. The
+    bundled Transformers server accepts the same calls but processes them
+    serially, so this remains compatible with the fallback backend.
+    """
+    if not items:
+        return []
+    llm = get_llm()
+    if llm is None:
+        return [template_explain(evidence, level) for evidence, level in items]
+    settings = get_llm_settings() or {}
+    workers = min(max(1, int(settings.get("concurrency", 1))), len(items))
+    if workers == 1:
+        return [llm_explain(evidence, level, llm=llm) for evidence, level in items]
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="llm-explain") as pool:
+        return list(pool.map(lambda item: llm_explain(item[0], item[1], llm=llm), items))
 
 
 def _fallback_with_latency(evidence: RiskEvidence, level: str, latency_ms: float, raw: str = None) -> Dict[str, Any]:

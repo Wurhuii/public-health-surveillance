@@ -193,6 +193,30 @@ class TestExplanation(unittest.TestCase):
         ok, errors = validate_draft(draft, self._evidence())
         self.assertTrue(ok, errors)
 
+    def test_llm_explain_many_uses_configured_concurrency(self):
+        import threading
+        import surveillance_agent.agent.explanation as explanation_mod
+
+        barrier = threading.Barrier(2)
+
+        def fake_llm(prompt):
+            barrier.wait(timeout=2)
+            return '{"text": "监测数据出现变化，建议继续观察。"}'
+
+        original_llm = explanation_mod.get_llm
+        original_settings = explanation_mod.get_llm_settings
+        explanation_mod.get_llm = lambda: fake_llm
+        explanation_mod.get_llm_settings = lambda: {"concurrency": 2}
+        try:
+            drafts = explanation_mod.llm_explain_many(
+                [(self._evidence(), "high"), (self._evidence(), "watch")]
+            )
+        finally:
+            explanation_mod.get_llm = original_llm
+            explanation_mod.get_llm_settings = original_settings
+        self.assertEqual(len(drafts), 2)
+        self.assertTrue(all(draft["draft_source"] == "llm" for draft in drafts))
+
     def test_llm_prompt_contains_real_values_not_placeholders(self):
         import surveillance_agent.agent.explanation as explanation_mod
 
@@ -209,8 +233,9 @@ class TestExplanation(unittest.TestCase):
         finally:
             explanation_mod.get_llm = original
         self.assertEqual(draft["draft_source"], "llm")
-        self.assertNotIn('"value": 数字', captured["prompt"])
-        self.assertIn('"value": 12.0', captured["prompt"])
+        self.assertIn('"observed": 12.0', captured["prompt"])
+        self.assertIn("只返回 text 字段", captured["prompt"])
+        self.assertNotIn('"claims":', captured["prompt"].split("输出示例：", 1)[-1])
 
     def test_forged_number_rejected(self):
         ev = self._evidence()
@@ -244,6 +269,8 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(result["summary"]["total_events"], 2644)
         self.assertGreater(result["summary"]["risk_signals"], 0)
         self.assertTrue(result["summary"]["use_langgraph"] is False)
+        self.assertIn("explain", result["summary"]["node_times"])
+        self.assertGreaterEqual(result["summary"]["node_times"]["explain"]["total_seconds"], 0)
 
     def test_messages_correlated(self):
         from surveillance_agent.utils import read_jsonl

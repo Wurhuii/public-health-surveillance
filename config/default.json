@@ -45,7 +45,12 @@
     "mode": "off",
     "base_url": "http://127.0.0.1:8002/v1",
     "model": "local-model",
-    "api_key": ""
+    "api_key": "",
+    "temperature": 0.0,
+    "max_tokens": 256,
+    "timeout": 120,
+    "retries": 2,
+    "concurrency": 1
   },
   "model_version": "1.0.0"
 }

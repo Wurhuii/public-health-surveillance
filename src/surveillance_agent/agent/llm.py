@@ -6,24 +6,40 @@ import re
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Callable, Optional
 
-from ..config import load_config
+from ..config import PROJECT_ROOT, load_config
+
+
+def _runtime_settings() -> dict:
+    """Read settings written by scripts/start_llm.sh, if present."""
+    path = Path(PROJECT_ROOT) / "var" / "llm_runtime.json"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            value = json.load(fh)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def get_llm_settings():
     cfg = load_config().get("llm", {})
-    mode = os.environ.get("SURVEILLANCE_LLM_MODE") or cfg.get("mode", "off")
-    if mode != "local_http":
+    runtime = _runtime_settings()
+    mode = os.environ.get("SURVEILLANCE_LLM_MODE") or runtime.get("mode") or cfg.get("mode", "off")
+    if mode not in ("local_http", "openai", "vllm", "mindie"):
         return None
     return {
-        "base_url": os.environ.get("SURVEILLANCE_LLM_BASE_URL") or cfg.get("base_url", "http://127.0.0.1:8002/v1"),
-        "model": os.environ.get("SURVEILLANCE_LLM_MODEL") or cfg.get("model", "local-model"),
+        "mode": mode,
+        "backend": os.environ.get("SURVEILLANCE_LLM_BACKEND") or runtime.get("backend", "openai"),
+        "base_url": os.environ.get("SURVEILLANCE_LLM_BASE_URL") or runtime.get("base_url") or cfg.get("base_url", "http://127.0.0.1:8002/v1"),
+        "model": os.environ.get("SURVEILLANCE_LLM_MODEL") or runtime.get("model") or cfg.get("model", "local-model"),
         "api_key": os.environ.get("SURVEILLANCE_LLM_API_KEY") or cfg.get("api_key", ""),
-        "timeout": float(os.environ.get("SURVEILLANCE_LLM_TIMEOUT", "120")),
-        "retries": int(os.environ.get("SURVEILLANCE_LLM_RETRIES", "2")),
-        "temperature": float(os.environ.get("SURVEILLANCE_LLM_TEMPERATURE", "0.2")),
-        "max_tokens": int(os.environ.get("SURVEILLANCE_LLM_MAX_TOKENS", "0")) or None,
+        "timeout": float(os.environ.get("SURVEILLANCE_LLM_TIMEOUT", cfg.get("timeout", 120))),
+        "retries": int(os.environ.get("SURVEILLANCE_LLM_RETRIES", cfg.get("retries", 2))),
+        "temperature": float(os.environ.get("SURVEILLANCE_LLM_TEMPERATURE", cfg.get("temperature", 0.0))),
+        "max_tokens": int(os.environ.get("SURVEILLANCE_LLM_MAX_TOKENS", cfg.get("max_tokens", 256))) or None,
+        "concurrency": max(1, int(os.environ.get("SURVEILLANCE_LLM_CONCURRENCY", runtime.get("concurrency", cfg.get("concurrency", 4))))),
     }
 
 

@@ -40,6 +40,11 @@ def _print_result(coordinator, result, elapsed_seconds: float = None) -> None:
         lat = exp.get("latency")
         if lat:
             line += f"，单次延迟 avg {lat['avg_ms']}ms / p95 {lat['p95_ms']}ms"
+        if exp.get("backend"):
+            line += (
+                f"，后端 {exp['backend']} / 并发 {exp.get('concurrency', 1)}"
+                f" / 解释阶段 {exp.get('wall_seconds', 0):.1f}s"
+            )
         if not exp.get("llm_enabled"):
             line += "（LLM未启用）"
         print(line)
@@ -52,6 +57,18 @@ def _print_result(coordinator, result, elapsed_seconds: float = None) -> None:
                     break
     print(f"  自主性阶段:      {summary.get('autonomy_stage', '')}")
     print(f"  LangGraph模式:   {summary.get('use_langgraph', False)}")
+    node_times = summary.get("node_times") or result.get("node_times") or {}
+    if node_times:
+        labels = {
+            "ingest": "数据接入", "aggregate": "聚合", "inject": "异常注入",
+            "detect": "异常检测", "fuse": "风险融合", "explain": "LLM解释",
+            "audit": "证据审计", "revise": "解释修订", "persist": "结果持久化",
+        }
+        parts = []
+        for name, timing in node_times.items():
+            seconds = timing.get("total_seconds", 0.0) if isinstance(timing, dict) else timing
+            parts.append(f"{labels.get(name, name)} {float(seconds):.2f}s")
+        print(f"  分阶段耗时:      {' | '.join(parts)}")
     if elapsed_seconds is not None:
         print(f"  整个流程耗时:    {_format_elapsed(elapsed_seconds)}")
     print("=" * 60)

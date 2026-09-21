@@ -445,7 +445,7 @@ $env:SURVEILLANCE_LLM_API_KEY = ""
   - §6.2 "展开为一个或多个症候群" 与实际"互斥单映射"不符；
   - §6.5 风险信号按"时间窗口"粒度的描述与 `merge_alarm_runs` 合并段语义不符。
 - **死代码**：`agent/supervisor.py` 的 `ACTION_WHITELIST / PREQUISITES / missing_preconditions` 定义了但从未被编排器或 LangGraph 引用；`agent/messages.py` 的 `AgentMessage` 协议字段与审计追溯能力未完全发挥。
-- **`state.json` 的 `node_times` 恒为空**：README 声称记录"各步骤时间"，实际 `_write_state` 未填充。
+- **阶段计时已补齐**：`state.json` 和 `summary.json` 的 `node_times` 记录各阶段调用次数、累计耗时和最近一次耗时，CLI 同步展示。
 
 ### B. 统计方法问题（影响实验结果可信度）
 
@@ -464,7 +464,7 @@ $env:SURVEILLANCE_LLM_API_KEY = ""
 - **`pyproject.toml` 打包不完整**：`packages` 缺少 `surveillance_agent.research`，且 `static/` 与 `config/` 未声明为包数据 → 按 README §8.3 离线 `pip install -e .` 后，`experiment rq*` 会失败、`serve` 页面 404（平台 demo 用 `PYTHONPATH=src` 直接跑，暂未受影响）。
 - **`run_id` 秒级粒度**（`orchestrator.py`）：同一秒内并发运行会撞 ID，SQLite `INSERT OR REPLACE` 互相覆盖；API `POST /api/runs` 无并发保护。
 - **API 无鉴权/限流/输入校验**：`shape`、`magnitude`、`autonomy_stage` 接受任意值，`POST /api/runs` 同步阻塞线程。
-- **LLM 服务与调用为串行**：`scripts/llm_server.py` 单进程 uvicorn、客户端逐个信号调用 → 风险信号多时耗时线性增长（平台实测注入场景约 47 条信号需数分钟量级）；未做批量/并发。
+- **LLM 并发取决于后端**：客户端支持可配置并发；vLLM/MindIE 可进行连续批处理。项目自带的 Transformers 服务仍按串行推理运行，启动脚本会把其并发数设为 1。
 - **LLM 输出依赖模型能力**：提示词要求"只输出 JSON"，`extract_json` 已容错，但 1.5B 模型偶发输出不合规仍会回退模板；RQ4 的 `grounded_llm`/`ungrounded_llm` 目前仍只是状态占位，未真正执行 LLM 对照实验。
 - **LLM 运行依赖平台环境**：`llm_server.py` 需要平台已装 transformers/torch/torch_npu；本机（Windows 开发环境）未装则无法本地跑通模型服务。
 - **无日志框架**：全用 `print`/`write_json`，缺少统一结构化日志。

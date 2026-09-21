@@ -38,27 +38,36 @@ pip install -r requirements-llm.txt
 pip install -r requirements.txt
 ```
 
-## 3. 启动本地 LLM 服务
+## 3. 一键加载环境并启动 LLM 服务
+
+脚本依次加载 CANN 和 ATB 环境，检查 Python、项目依赖与模型目录，选择后端，
+后台启动服务并等待 `/v1/models` 可用。成功后会写入 `var/llm_runtime.json`，
+监测程序会自动读取，不需要再手工执行多条 `export`。
 
 ```bash
 cd /data/home/6120260064/wrh/code
 
-# 模型默认目录已设为 /data/home/6120260064/model/Qwen2.5-1.5B-Instruct，可不带 --model-dir：
+# 推荐：检测到 vllm-ascend 时优先使用，否则回退 Transformers
+bash scripts/start_llm.sh 8002
 
-# 前台启动（调试）：
-python scripts/llm_server.py --host 0.0.0.0 --port 8002
+# 明确选择 vLLM（连续批处理，并发解释时吞吐量更高）
+LLM_BACKEND=vllm bash scripts/start_llm.sh 8002
 
-# 后台常驻（推荐 demo 用）：
-nohup python scripts/llm_server.py --host 0.0.0.0 --port 8002 > var/llm_server.log 2>&1 &
+# 明确使用项目自带 Transformers 服务
+LLM_BACKEND=transformers bash scripts/start_llm.sh 8002
 
-# 若模型换路径，用 --model-dir 显式指定：
-# python scripts/llm_server.py --model-dir /data/home/6120260064/model/Qwen2.5-1.5B-Instruct \
-#     --host 0.0.0.0 --port 8002
+# MindIE/ATB：先在 MindIE conf/config.json 中设置模型、端口和 backendType=atb
+LLM_BACKEND=mindie \
+MINDIE_BASE_URL=http://127.0.0.1:1025/v1 \
+bash scripts/start_llm.sh
 ```
 
-- `--device` 默认 `auto`：自动识别 cuda / 昇腾 npu / cpu，也可手动指定。
-- GPU/NPU 自动用 `bfloat16` 加载，显存约 3GB；CPU 运行较慢但可用。
-- 看到 `模型就绪` 和 `服务已启动: http://0.0.0.0:8002/v1` 即为成功。
+默认模型目录是 `/data/home/6120260064/model/Qwen2.5-1.5B-Instruct`。更换模型时设置
+`LLM_MODEL_DIR` 和 `LLM_MODEL_NAME`。并发数默认是 4，可通过 `LLM_CONCURRENCY` 调整；
+推荐先测试 4，再根据 NPU 内存和吞吐量测试 8。
+
+vLLM 后端需要预先安装与服务器 CANN、PyTorch 和 Python 版本匹配的
+`vllm`/`vllm-ascend`。这些组件版本必须配套，因此脚本只检查，不自动在线安装。
 
 > **注意：智算平台每次新建/切换 worker 节点都是全新环境，`nohup` 起的服务不会保留到下一个节点。** 换节点后必须重新执行启动命令。推荐用一键脚本：
 
@@ -95,9 +104,10 @@ export SURVEILLANCE_LLM_BASE_URL=http://127.0.0.1:8002/v1
 export SURVEILLANCE_LLM_MODEL=Qwen2.5-1.5B-Instruct
 export SURVEILLANCE_LLM_API_KEY=""          # 无鉴权可留空
 # 可选调参：
-export SURVEILLANCE_LLM_TEMPERATURE=0.2      # 越低越稳定（JSON 输出）
+export SURVEILLANCE_LLM_TEMPERATURE=0        # 解释任务使用确定性输出
 export SURVEILLANCE_LLM_TIMEOUT=120          # 单次请求超时秒
 export SURVEILLANCE_LLM_RETRIES=2            # 失败重试次数
+export SURVEILLANCE_LLM_CONCURRENCY=4        # vLLM/MindIE 可将并发请求连续批处理
 ```
 
 对应到你的环境，完整操作（在同一终端会话里依次执行）：
@@ -203,7 +213,12 @@ python -m surveillance_agent serve --host 0.0.0.0 --port 8080
 
 - `llm_parse_success_rate = llm_generated / drafts`：LLM 输出被 `extract_json` 成功解析成解释的占比；未成功解析（非 JSON、网络/超时异常）自动回退模板，记为 `template_fallback`；
 - `latency`：每次 LLM 调用的耗时统计（毫秒）。测量点为 `llm_explain` 内 `llm(prompt)` 前后（含 HTTP 往返 + JSON 解析），即"单次推理延迟"的**端到端口径**；
+- `wall_seconds` 是整个解释阶段的墙钟时间；并发开启后它会小于各请求延迟之和；
 - `llm_enabled=false` 表示未配置 LLM（全部为模板，成功率/延迟无意义）。
+
+终端还会输出数据接入、聚合、异常注入、异常检测、风险融合、LLM 解释、证据审计和
+结果持久化各阶段耗时；相同数据也保存在 `summary.json.node_times` 与
+`state.json.node_times`。
 
 只想快速测一次单次延迟，不必跑全流程：
 
