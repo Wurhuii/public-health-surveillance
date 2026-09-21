@@ -361,6 +361,10 @@ class TestImprovements(unittest.TestCase):
         self.assertEqual(extract_json("{'a': 1, 'b': 'x'}"), {"a": 1, "b": "x"})
         self.assertEqual(extract_json('{"a": 1, "b": [1, 2,],}'), {"a": 1, "b": [1, 2]})
         self.assertEqual(extract_json('好的，这是结果：{"a": None, "b": True}'), {"a": None, "b": True})
+        self.assertEqual(
+            extract_json('{"text": "解释", "claims": [{"field": "observed", "value": 5.0"}]}'),
+            {"text": "解释", "claims": [{"field": "observed", "value": 5.0}]},
+        )
 
 
 if __name__ == "__main__":

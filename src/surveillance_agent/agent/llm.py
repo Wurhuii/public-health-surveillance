@@ -78,6 +78,15 @@ def _repair_json(frag: str) -> str:
     import re
 
     frag = re.sub(r",\s*([}\]])", r"\1", frag)
+    # Small instruction-tuned models occasionally emit a closing quote after
+    # an otherwise unquoted JSON number, for example: ``"value": 5.0"``.
+    # Remove only that unmatched trailing quote; correctly quoted numbers are
+    # unaffected because they have an opening quote before the number.
+    frag = re.sub(
+        r'(:\s*-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"\s*([,}\]])',
+        r"\1\2",
+        frag,
+    )
     frag = frag.replace("None", "null").replace("True", "true").replace("False", "false")
     return frag
 
