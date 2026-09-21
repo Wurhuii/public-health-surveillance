@@ -20,6 +20,9 @@ import argparse
 import os
 import time
 
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
 DEFAULT_MODEL_DIR = os.environ.get("QWEN_MODEL_DIR", "/data/home/6120260064/model/Qwen2.5-1.5B-Instruct")
 
 
@@ -121,9 +124,6 @@ def main() -> None:
         model = AutoModelForCausalLM.from_pretrained(model_dir, trust_remote_code=True)
     model.eval()
     print(f"[llm_server] 模型就绪: {os.path.basename(model_dir.rstrip('/'))}", flush=True)
-
-    from fastapi import FastAPI, Request
-    from fastapi.responses import JSONResponse
 
     app = FastAPI(title="local-llm")
     model_name = os.path.basename(model_dir.rstrip("/"))
