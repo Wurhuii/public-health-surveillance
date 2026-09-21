@@ -105,7 +105,7 @@ async function run(inject) {
   st.style.color = '#6b7280';
   st.textContent = '运行中...（约 2-3 秒）';
   try {
-    const r = await fetch('/api/runs', { method: 'POST', headers: {'Content-Type':'application/json'},
+    const r = await fetch('api/runs', { method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ inject_outbreak: inject, injection_shape: 'gradual', injection_magnitude: 10 }) });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const data = await r.json();
@@ -120,7 +120,7 @@ async function run(inject) {
 
 async function load() {
   const [risksR, runsR, healthR] = await Promise.all([
-    fetch('/api/risks'), fetch('/api/runs'), fetch('/api/health')]);
+    fetch('api/risks'), fetch('api/runs'), fetch('api/health')]);
   const risks = await risksR.json();
   const runs = await runsR.json();
   const health = await healthR.json();

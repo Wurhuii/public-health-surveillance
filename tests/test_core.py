@@ -406,6 +406,15 @@ class TestImprovements(unittest.TestCase):
         res2 = handler.dispatch("GET", "/static/index.html", b"")
         self.assertEqual(res2[0], 200)
 
+    def test_frontend_api_urls_work_behind_path_proxy(self):
+        from surveillance_agent.config import PROJECT_ROOT
+
+        html = (PROJECT_ROOT / "src" / "surveillance_agent" / "static" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("fetch('/api/", html)
+        self.assertIn("fetch('api/runs'", html)
+
     def test_extract_json_from_llm_output(self):
         from surveillance_agent.agent.llm import extract_json
 
