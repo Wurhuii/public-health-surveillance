@@ -20,8 +20,8 @@ from ..domain import (
 from ..models import build_detectors, fuse_alarms
 from ..storage import Storage
 from ..utils import append_jsonl, get_salt, hash_id, write_json
-from .explanation import llm_explain, template_explain, validate_draft
-from .llm import get_llm
+from .explanation import llm_explain_many, template_explain, validate_draft
+from .llm import get_llm, get_llm_settings
 from .messages import AgentMessage, new_correlation_id
 from .roles import ACTION_TO_ROLE, list_roles
 
@@ -74,6 +74,7 @@ class MultiAgentCoordinator:
             "explanation_drafts": [],
             "explanations": [],
             "summary": {},
+            "node_times": {},
         }
 
     def _log_message(self, sender: str, receiver: str, task: str, payload: Dict, cid: str, kind: str) -> None:
@@ -110,8 +111,24 @@ class MultiAgentCoordinator:
         cid = new_correlation_id()
         self._log_message("supervisor", role, action, {"action": action}, cid, "request")
         method = getattr(self, f"_task_{action}")
-        result = method()
+        started = time.monotonic()
+        try:
+            result = method()
+        finally:
+            elapsed = time.monotonic() - started
+            timing = self.state["node_times"].setdefault(
+                action, {"calls": 0, "total_seconds": 0.0, "last_seconds": 0.0}
+            )
+            timing["calls"] += 1
+            timing["total_seconds"] = round(timing["total_seconds"] + elapsed, 3)
+            timing["last_seconds"] = round(elapsed, 3)
         self._log_message(role, "supervisor", action, {"summary": result}, cid, "response")
+        if action == "persist":
+            # persist itself is measured only after the first write; refresh the
+            # human-readable artifacts so they contain the complete timings.
+            self._build_summary()
+            write_json(str(self.run_dir / "summary.json"), self.state["summary"])
+            self._write_state()
         return result
 
     # ---------------- tasks ----------------
@@ -405,10 +422,9 @@ class MultiAgentCoordinator:
         return RiskSignal(signal_id=evidence.signal_id, level=level, evidence=evidence)
 
     def _task_explain(self) -> Dict:
-        drafts = []
-        for sig in self.state["risk_signals"]:
-            draft = llm_explain(sig.evidence, sig.level)
-            drafts.append(draft)
+        started = time.monotonic()
+        items = [(sig.evidence, sig.level) for sig in self.state["risk_signals"]]
+        drafts = llm_explain_many(items)
         self.state["explanation_drafts"] = drafts
         write_json(str(self.run_dir / "explanation_drafts.json"), drafts)
         llm_generated = sum(1 for d in drafts if d.get("draft_source") == "llm")
@@ -418,7 +434,12 @@ class MultiAgentCoordinator:
             "llm_generated": llm_generated,
             "template_fallback": len(drafts) - llm_generated,
             "llm_parse_success_rate": round(llm_generated / len(drafts), 4) if drafts else 0.0,
+            "wall_seconds": round(time.monotonic() - started, 3),
         }
+        settings = get_llm_settings()
+        if settings:
+            stats["backend"] = settings.get("backend", "openai")
+            stats["concurrency"] = settings.get("concurrency", 1)
         latencies = [d["latency_ms"] for d in drafts if d.get("latency_ms") is not None]
         if latencies:
             lat_sorted = sorted(latencies)
@@ -443,6 +464,7 @@ class MultiAgentCoordinator:
             ok, errors = validate_draft(draft, sig.evidence)
             text = draft.get("text", "")
             used_fallback = False
+            explanation_source = draft.get("draft_source", "template")
             if not ok:
                 rejected.append(signal_id)
                 fallback = template_explain(sig.evidence, sig.level)
@@ -452,6 +474,7 @@ class MultiAgentCoordinator:
                     ok = True
                     errors = []
                     used_fallback = True
+                    explanation_source = "template_fallback"
                     rejected = [r for r in rejected if r != signal_id]
             results.append(
                 {
@@ -461,6 +484,7 @@ class MultiAgentCoordinator:
                     "text": text,
                     "used_fallback": used_fallback,
                     "draft_source": draft.get("draft_source", ""),
+                    "explanation_source": explanation_source,
                 }
             )
 
@@ -468,6 +492,7 @@ class MultiAgentCoordinator:
             for r in results:
                 if r["signal_id"] == sig.signal_id:
                     sig.explanation = r["text"] if r["passed"] else ""
+                    sig.explanation_source = r["explanation_source"] if r["passed"] else "human_review"
 
         self.state["explanations"] = results
         write_json(str(self.run_dir / "explanations.json"), results)
@@ -483,6 +508,7 @@ class MultiAgentCoordinator:
             draft = template_explain(sig.evidence, sig.level)
             ok, _ = validate_draft(draft, sig.evidence)
             sig.explanation = draft["text"] if ok else ""
+            sig.explanation_source = "template_revision" if ok else "human_review"
             drafts.append(draft)
         self.state["explanation_drafts"] = drafts
         write_json(str(self.run_dir / "explanation_drafts.json"), drafts)
@@ -527,6 +553,7 @@ class MultiAgentCoordinator:
             "use_langgraph": self.use_langgraph,
             "quality": self.state["quality"].get("total_events", 0),
             "explanation": self.state.get("explanation_stats", {}),
+            "node_times": self.state.get("node_times", {}),
         }
 
     def _write_state(self) -> None:
@@ -536,7 +563,7 @@ class MultiAgentCoordinator:
             "summary": self.state["summary"],
             "quality": self.state["quality"],
             "injection_manifest": self.state["injection_manifest"],
-            "node_times": {},
+            "node_times": self.state.get("node_times", {}),
         }
         write_json(str(self.run_dir / "state.json"), state_out)
 

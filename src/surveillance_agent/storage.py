@@ -43,6 +43,7 @@ class Storage:
                 observed REAL,
                 expected REAL,
                 explanation TEXT,
+                explanation_source TEXT,
                 requires_human_review INTEGER,
                 evidence TEXT
             )
@@ -50,6 +51,10 @@ class Storage:
         )
         try:
             cur.execute("ALTER TABLE risk_signals ADD COLUMN evidence TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cur.execute("ALTER TABLE risk_signals ADD COLUMN explanation_source TEXT")
         except sqlite3.OperationalError:
             pass
         self.conn.commit()
@@ -82,13 +87,14 @@ class Storage:
                     e.get("observed", 0.0),
                     e.get("expected", 0.0),
                     s.get("explanation", ""),
+                    s.get("explanation_source", ""),
                     int(s.get("requires_human_review", False)),
                     json.dumps(e, ensure_ascii=False),
                 )
             )
         self.conn.executemany(
-            "INSERT INTO risk_signals (run_id, signal_id, level, source, scope_type, scope_key, syndrome, date, observed, expected, explanation, requires_human_review, evidence) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO risk_signals (run_id, signal_id, level, source, scope_type, scope_key, syndrome, date, observed, expected, explanation, explanation_source, requires_human_review, evidence) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
         self.conn.commit()

@@ -79,6 +79,7 @@ class RiskSignal:
     level: str
     evidence: RiskEvidence
     explanation: str = ""
+    explanation_source: str = ""
     requires_human_review: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
@@ -87,5 +88,6 @@ class RiskSignal:
             "level": self.level,
             "evidence": self.evidence.to_dict(),
             "explanation": self.explanation,
+            "explanation_source": self.explanation_source,
             "requires_human_review": self.requires_human_review,
         }

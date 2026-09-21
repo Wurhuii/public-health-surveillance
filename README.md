@@ -340,7 +340,14 @@ pip install --no-index --find-links .\wheelhouse -e .
 
 ## 9. 本地 LLM 接入
 
-代码假定昇腾 910B 上的模型服务提供 OpenAI 兼容的 `/v1/chat/completions` 接口。配置示例：
+代码假定昇腾 910B 上的模型服务提供 OpenAI 兼容的 `/v1/chat/completions` 接口。推荐直接运行一键脚本；它会加载 CANN/ATB 环境、检查依赖和模型目录，优先选择已安装的 vLLM，并将客户端配置写入运行目录：
+
+```bash
+bash scripts/start_llm.sh 8002
+# 或显式选择：LLM_BACKEND=vllm / mindie / transformers
+```
+
+也可以手工配置已有服务：
 
 ```powershell
 $env:SURVEILLANCE_LLM_MODE = "local_http"

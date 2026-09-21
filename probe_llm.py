@@ -13,8 +13,30 @@ import time
 import urllib.error
 import urllib.request
 
-BASE = os.environ.get("SURVEILLANCE_LLM_BASE_URL", "http://127.0.0.1:8002/v1")
+PORT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "var", "llm_port.txt")
+
+
+def _default_base():
+    if os.path.isfile(PORT_FILE):
+        try:
+            with open(PORT_FILE, encoding="utf-8") as fh:
+                port = int(fh.read().strip())
+            return f"http://127.0.0.1:{port}/v1"
+        except Exception:
+            pass
+    return "http://127.0.0.1:8002/v1"
+
+
+BASE = os.environ.get("SURVEILLANCE_LLM_BASE_URL") or _default_base()
 MODEL = os.environ.get("SURVEILLANCE_LLM_MODEL", "Qwen2.5-1.5B-Instruct")
+
+
+def health_url():
+    """The OpenAI API lives under /v1, while this project's health route does not."""
+    base = BASE.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    return base + "/health"
 
 
 def chat(prompt: str, temperature: float = 0.2, max_tokens: int = 512):
@@ -92,7 +114,7 @@ print("MODEL    =", MODEL)
 print()
 print("---- 1) /health 检查 ----")
 try:
-    with urllib.request.urlopen(BASE.rstrip("/") + "/health", timeout=5) as r:
+    with urllib.request.urlopen(health_url(), timeout=5) as r:
         print("health:", r.status, r.read().decode("utf-8", "replace")[:200])
 except Exception as exc:
     print("health 失败:", exc)

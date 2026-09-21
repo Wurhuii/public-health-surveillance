@@ -6,24 +6,40 @@ import re
 import time
 import urllib.error
 import urllib.request
-from typing import Callable, Optional
+from pathlib import Path
+from typing import Callable, List, Optional
 
-from ..config import load_config
+from ..config import PROJECT_ROOT, load_config
+
+
+def _runtime_settings() -> dict:
+    """Read settings written by scripts/start_llm.sh, if present."""
+    path = Path(PROJECT_ROOT) / "var" / "llm_runtime.json"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            value = json.load(fh)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def get_llm_settings():
     cfg = load_config().get("llm", {})
-    mode = os.environ.get("SURVEILLANCE_LLM_MODE") or cfg.get("mode", "off")
-    if mode != "local_http":
+    runtime = _runtime_settings()
+    mode = os.environ.get("SURVEILLANCE_LLM_MODE") or runtime.get("mode") or cfg.get("mode", "off")
+    if mode not in ("local_http", "openai", "vllm", "mindie"):
         return None
     return {
-        "base_url": os.environ.get("SURVEILLANCE_LLM_BASE_URL") or cfg.get("base_url", "http://127.0.0.1:8002/v1"),
-        "model": os.environ.get("SURVEILLANCE_LLM_MODEL") or cfg.get("model", "local-model"),
+        "mode": mode,
+        "backend": os.environ.get("SURVEILLANCE_LLM_BACKEND") or runtime.get("backend", "openai"),
+        "base_url": os.environ.get("SURVEILLANCE_LLM_BASE_URL") or runtime.get("base_url") or cfg.get("base_url", "http://127.0.0.1:8002/v1"),
+        "model": os.environ.get("SURVEILLANCE_LLM_MODEL") or runtime.get("model") or cfg.get("model", "local-model"),
         "api_key": os.environ.get("SURVEILLANCE_LLM_API_KEY") or cfg.get("api_key", ""),
-        "timeout": float(os.environ.get("SURVEILLANCE_LLM_TIMEOUT", "120")),
-        "retries": int(os.environ.get("SURVEILLANCE_LLM_RETRIES", "2")),
-        "temperature": float(os.environ.get("SURVEILLANCE_LLM_TEMPERATURE", "0.2")),
-        "max_tokens": int(os.environ.get("SURVEILLANCE_LLM_MAX_TOKENS", "0")) or None,
+        "timeout": float(os.environ.get("SURVEILLANCE_LLM_TIMEOUT", cfg.get("timeout", 120))),
+        "retries": int(os.environ.get("SURVEILLANCE_LLM_RETRIES", cfg.get("retries", 2))),
+        "temperature": float(os.environ.get("SURVEILLANCE_LLM_TEMPERATURE", cfg.get("temperature", 0.0))),
+        "max_tokens": int(os.environ.get("SURVEILLANCE_LLM_MAX_TOKENS", cfg.get("max_tokens", 256))) or None,
+        "concurrency": max(1, int(os.environ.get("SURVEILLANCE_LLM_CONCURRENCY", runtime.get("concurrency", cfg.get("concurrency", 4))))),
     }
 
 
@@ -71,6 +87,57 @@ def get_llm() -> Optional[Callable[[str], str]]:
     return _call
 
 
+def get_llm_batch() -> Optional[Callable[[List[str]], List[str]]]:
+    """Return the bundled server's native batch client when available."""
+    settings = get_llm_settings()
+    if settings is None or settings.get("backend") != "transformers":
+        return None
+    base_url = settings["base_url"]
+    api_key = settings["api_key"]
+
+    def _call(prompts: List[str]) -> List[str]:
+        if not prompts:
+            return []
+        url = base_url.rstrip("/") + "/chat/completions/batch"
+        request_body = {
+            "requests": [
+                {
+                    "model": settings["model"],
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": settings["temperature"],
+                    "max_tokens": settings["max_tokens"],
+                }
+                for prompt in prompts
+            ]
+        }
+        last_err = None
+        for attempt in range(settings["retries"]):
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(request_body).encode("utf-8"),
+                method="POST",
+            )
+            req.add_header("Content-Type", "application/json")
+            if api_key:
+                req.add_header("Authorization", f"Bearer {api_key}")
+            try:
+                with urllib.request.urlopen(req, timeout=settings["timeout"]) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
+                outputs = result.get("outputs")
+                if not isinstance(outputs, list) or len(outputs) != len(prompts):
+                    raise ValueError("invalid batch response")
+                return [str(output) for output in outputs]
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", "replace")[:500]
+                last_err = f"HTTP {exc.code}: {detail}"
+            except Exception as exc:
+                last_err = exc
+            time.sleep(1 + attempt)
+        raise RuntimeError(f"LLM batch call failed after {settings['retries']} attempts -> {last_err}")
+
+    return _call
+
+
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
 
@@ -78,6 +145,15 @@ def _repair_json(frag: str) -> str:
     import re
 
     frag = re.sub(r",\s*([}\]])", r"\1", frag)
+    # Small instruction-tuned models occasionally emit a closing quote after
+    # an otherwise unquoted JSON number, for example: ``"value": 5.0"``.
+    # Remove only that unmatched trailing quote; correctly quoted numbers are
+    # unaffected because they have an opening quote before the number.
+    frag = re.sub(
+        r'(:\s*-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"\s*([,}\]])',
+        r"\1\2",
+        frag,
+    )
     frag = frag.replace("None", "null").replace("True", "true").replace("False", "false")
     return frag
 

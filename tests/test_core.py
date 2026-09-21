@@ -176,6 +176,94 @@ class TestExplanation(unittest.TestCase):
         self.assertIn("latency_ms", draft)
         self.assertGreaterEqual(draft["latency_ms"], 0)
 
+    def test_llm_explain_rebuilds_claims_from_evidence(self):
+        import surveillance_agent.agent.explanation as explanation_mod
+
+        def fake_llm(prompt):
+            return '{"text": "监测数据出现变化，建议继续观察。", "claims": []}'
+
+        original = explanation_mod.get_llm
+        explanation_mod.get_llm = lambda: fake_llm
+        try:
+            draft = explanation_mod.llm_explain(self._evidence())
+        finally:
+            explanation_mod.get_llm = original
+        self.assertEqual(draft["draft_source"], "llm")
+        self.assertEqual([c["field"] for c in draft["claims"]], ["observed", "expected", "syndrome", "date"])
+        ok, errors = validate_draft(draft, self._evidence())
+        self.assertTrue(ok, errors)
+
+    def test_llm_explain_many_uses_configured_concurrency(self):
+        import threading
+        import surveillance_agent.agent.explanation as explanation_mod
+
+        barrier = threading.Barrier(2)
+
+        def fake_llm(prompt):
+            barrier.wait(timeout=2)
+            return '{"text": "监测数据出现变化，建议继续观察。"}'
+
+        original_llm = explanation_mod.get_llm
+        original_settings = explanation_mod.get_llm_settings
+        explanation_mod.get_llm = lambda: fake_llm
+        explanation_mod.get_llm_settings = lambda: {"concurrency": 2}
+        try:
+            drafts = explanation_mod.llm_explain_many(
+                [(self._evidence(), "high"), (self._evidence(), "watch")]
+            )
+        finally:
+            explanation_mod.get_llm = original_llm
+            explanation_mod.get_llm_settings = original_settings
+        self.assertEqual(len(drafts), 2)
+        self.assertTrue(all(draft["draft_source"] == "llm" for draft in drafts))
+
+    def test_llm_explain_many_uses_transformers_batch_endpoint(self):
+        import surveillance_agent.agent.explanation as explanation_mod
+
+        calls = []
+
+        def fake_batch(prompts):
+            calls.append(len(prompts))
+            return ['{"text": "批量解释。"}' for _ in prompts]
+
+        original_llm = explanation_mod.get_llm
+        original_batch = explanation_mod.get_llm_batch
+        original_settings = explanation_mod.get_llm_settings
+        explanation_mod.get_llm = lambda: (lambda prompt: '{"text": "单条解释。"}')
+        explanation_mod.get_llm_batch = lambda: fake_batch
+        explanation_mod.get_llm_settings = lambda: {"backend": "transformers", "concurrency": 2}
+        try:
+            drafts = explanation_mod.llm_explain_many(
+                [(self._evidence(), "high") for _ in range(5)]
+            )
+        finally:
+            explanation_mod.get_llm = original_llm
+            explanation_mod.get_llm_batch = original_batch
+            explanation_mod.get_llm_settings = original_settings
+        self.assertEqual(calls, [2, 2, 1])
+        self.assertEqual(len(drafts), 5)
+        self.assertTrue(all(draft["draft_source"] == "llm" for draft in drafts))
+
+    def test_llm_prompt_contains_real_values_not_placeholders(self):
+        import surveillance_agent.agent.explanation as explanation_mod
+
+        captured = {}
+
+        def fake_llm(prompt):
+            captured["prompt"] = prompt
+            return '{"text": "监测值高于预期，建议继续观察。"}'
+
+        original = explanation_mod.get_llm
+        explanation_mod.get_llm = lambda: fake_llm
+        try:
+            draft = explanation_mod.llm_explain(self._evidence())
+        finally:
+            explanation_mod.get_llm = original
+        self.assertEqual(draft["draft_source"], "llm")
+        self.assertIn('"observed": 12.0', captured["prompt"])
+        self.assertIn("只返回 text 字段", captured["prompt"])
+        self.assertNotIn('"claims":', captured["prompt"].split("输出示例：", 1)[-1])
+
     def test_forged_number_rejected(self):
         ev = self._evidence()
         draft = template_explain(ev)
@@ -208,6 +296,21 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(result["summary"]["total_events"], 2644)
         self.assertGreater(result["summary"]["risk_signals"], 0)
         self.assertTrue(result["summary"]["use_langgraph"] is False)
+        self.assertIn("explain", result["summary"]["node_times"])
+        self.assertGreaterEqual(result["summary"]["node_times"]["explain"]["total_seconds"], 0)
+        self.assertTrue(all(signal.explanation for signal in result["risk_signals"]))
+        self.assertTrue(all(signal.explanation_source for signal in result["risk_signals"]))
+
+        from surveillance_agent.storage import Storage
+
+        storage = Storage(str(coord.run_dir.parent.parent / "surveillance.db"))
+        try:
+            saved = storage.query_signals(result["run_id"])
+        finally:
+            storage.close()
+        self.assertEqual(len(saved), len(result["risk_signals"]))
+        self.assertTrue(all(row["explanation"] for row in saved))
+        self.assertTrue(all(row["explanation_source"] for row in saved))
 
     def test_messages_correlated(self):
         from surveillance_agent.utils import read_jsonl
@@ -241,6 +344,12 @@ class TestEndToEnd(unittest.TestCase):
 
 
 class TestImprovements(unittest.TestCase):
+    def test_cli_formats_total_elapsed_time(self):
+        from surveillance_agent.cli import _format_elapsed
+
+        self.assertEqual(_format_elapsed(0), "00:00:00.0 (0.0 秒)")
+        self.assertEqual(_format_elapsed(3661.25), "01:01:01.2 (3661.2 秒)")
+
     def test_cusum_resets_after_alarm(self):
         from surveillance_agent.models.detectors import CUSUM
 
@@ -293,6 +402,7 @@ class TestImprovements(unittest.TestCase):
         self.assertEqual(result["rejected"], [])
         for sig in coord.state["risk_signals"]:
             self.assertTrue(sig.explanation, "fallback explanation should be written back")
+            self.assertEqual(sig.explanation_source, "template_fallback")
 
     def test_adaptive_model_selection(self):
         from surveillance_agent.agent.model_policy import select_models
@@ -310,6 +420,17 @@ class TestImprovements(unittest.TestCase):
         res2 = handler.dispatch("GET", "/static/index.html", b"")
         self.assertEqual(res2[0], 200)
 
+    def test_frontend_api_urls_work_behind_path_proxy(self):
+        from surveillance_agent.config import PROJECT_ROOT
+
+        html = (PROJECT_ROOT / "src" / "surveillance_agent" / "static" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("fetch('/api/", html)
+        self.assertIn("fetch('api/runs'", html)
+        self.assertIn("function explanationHtml", html)
+        self.assertIn("escapeHtml(visibleText)", html)
+
     def test_extract_json_from_llm_output(self):
         from surveillance_agent.agent.llm import extract_json
 
@@ -325,6 +446,10 @@ class TestImprovements(unittest.TestCase):
         self.assertEqual(extract_json("{'a': 1, 'b': 'x'}"), {"a": 1, "b": "x"})
         self.assertEqual(extract_json('{"a": 1, "b": [1, 2,],}'), {"a": 1, "b": [1, 2]})
         self.assertEqual(extract_json('好的，这是结果：{"a": None, "b": True}'), {"a": None, "b": True})
+        self.assertEqual(
+            extract_json('{"text": "解释", "claims": [{"field": "observed", "value": 5.0"}]}'),
+            {"text": "解释", "claims": [{"field": "observed", "value": 5.0}]},
+        )
 
 
 if __name__ == "__main__":
