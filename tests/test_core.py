@@ -430,6 +430,7 @@ class TestImprovements(unittest.TestCase):
         self.assertIn("fetch('api/runs'", html)
         self.assertIn("function explanationHtml", html)
         self.assertIn("escapeHtml(visibleText)", html)
+        self.assertIn("宜昌重点场所", html)
 
     def test_extract_json_from_llm_output(self):
         from surveillance_agent.agent.llm import extract_json

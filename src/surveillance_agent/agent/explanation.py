@@ -25,7 +25,7 @@ def _evidence_claims(evidence: RiskEvidence) -> List[Dict[str, Any]]:
 
 def template_explain(evidence: RiskEvidence, level: str = "") -> Dict[str, Any]:
     scores = evidence.scores
-    scope = evidence.scope_key
+    scope = evidence.scope_label or evidence.scope_key
     syn_label = evidence.syndrome
     level_label = LEVEL_LABELS.get(level, level or "风险")
     text = (
@@ -40,7 +40,7 @@ def template_explain(evidence: RiskEvidence, level: str = "") -> Dict[str, Any]:
 
 def _explanation_prompt(evidence: RiskEvidence) -> str:
     example_text = (
-        f"{evidence.scope_key}的{evidence.syndrome}症候群在{evidence.date}的监测值为"
+        f"{evidence.scope_label or evidence.scope_key}的{evidence.syndrome}症候群在{evidence.date}的监测值为"
         f"{evidence.observed}，预期值为{evidence.expected}，建议结合持续监测结果评估风险。"
     )
     return (

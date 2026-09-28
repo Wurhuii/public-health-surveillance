@@ -45,6 +45,7 @@ def inject_anomalies(
                 syndrome=p.syndrome,
                 date=p.date,
                 count=max(p.count, 1) + int(p.count * magnitude),
+                scope_label=p.scope_label,
             )
             modified[id(p)] = injected
             injections.append(

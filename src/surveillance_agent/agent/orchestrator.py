@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..adapters import detect_adapter_from_file, map_syndromes, read_rows
+from ..adapters.yichang_focus import ingest_yichang_focus_bundle
 from ..aggregation import aggregate
 from ..config import PROJECT_ROOT, data_dir, load_config, resolve_source_file
 from ..domain import (
@@ -143,6 +144,19 @@ class MultiAgentCoordinator:
                 per_source[source] = {"status": "disabled"}
                 continue
             path = resolve_source_file(self.cfg, source)
+            if source_cfg.get("kind") == "yichang_focus_bundle":
+                if not os.path.isdir(str(path)):
+                    per_source[source] = {"status": "missing", "directory": str(path)}
+                    issues.append(f"missing_directory:{source}")
+                    continue
+                source_events, bundle_report = ingest_yichang_focus_bundle(
+                    str(path), self.salt, source_cfg.get("person_key_fields")
+                )
+                events.extend(source_events)
+                per_source[source] = bundle_report
+                if bundle_report.get("status") != "ok":
+                    issues.append(f"not_ready_for_alerting:{source}")
+                continue
             if not os.path.isfile(str(path)):
                 per_source[source] = {"status": "missing", "file": str(path)}
                 issues.append(f"missing_file:{source}")
@@ -244,6 +258,7 @@ class MultiAgentCoordinator:
                     syndrome=p.syndrome,
                     date=p.date,
                     count=max(p.count, 1) + int(p.count * magnitude),
+                    scope_label=p.scope_label,
                 )
                 modified[id(p)] = injected
                 injections.append(
@@ -323,6 +338,7 @@ class MultiAgentCoordinator:
                             threshold=threshold,
                             detector=name,
                             alarm=alarm,
+                            scope_label=series[i].scope_label,
                         )
                     )
 
@@ -350,6 +366,7 @@ class MultiAgentCoordinator:
                     "threshold": dp.threshold,
                     "alarm": dp.alarm,
                     "observed": dp.observed,
+                    "scope_label": dp.scope_label,
                 }
             dates = sorted(by_date.keys())
 
@@ -416,6 +433,7 @@ class MultiAgentCoordinator:
             thresholds={k: v["threshold"] for k, v in det_res.items()},
             alarms={k: v["alarm"] for k, v in det_res.items()},
             model_version=model_version,
+            scope_label=next((v.get("scope_label", "") for v in det_res.values() if v.get("scope_label")), ""),
             quality_limits=[],
             run_dates=sorted(dates),
         )
@@ -552,6 +570,10 @@ class MultiAgentCoordinator:
             "autonomy_stage": self.autonomy_stage,
             "use_langgraph": self.use_langgraph,
             "quality": self.state["quality"].get("total_events", 0),
+            "source_readiness": {
+                source: detail.get("status", "unknown")
+                for source, detail in self.state["quality"].get("per_source", {}).items()
+            },
             "explanation": self.state.get("explanation_stats", {}),
             "node_times": self.state.get("node_times", {}),
         }

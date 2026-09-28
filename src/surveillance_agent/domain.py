@@ -29,6 +29,7 @@ class AggregatePoint:
     syndrome: str
     date: str
     count: int
+    scope_label: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -47,6 +48,7 @@ class DetectorPoint:
     threshold: float
     detector: str
     alarm: bool
+    scope_label: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -66,6 +68,7 @@ class RiskEvidence:
     thresholds: Dict[str, float]
     alarms: Dict[str, bool]
     model_version: str
+    scope_label: str = ""
     quality_limits: List[str] = field(default_factory=list)
     run_dates: List[str] = field(default_factory=list)
 

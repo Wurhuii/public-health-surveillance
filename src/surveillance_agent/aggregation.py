@@ -36,19 +36,20 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
         d = date.fromisoformat(ev.event_date)
         key_date = _week_start(d) if freq == "week" else d
         scope_key = ev.province if scope_type == "province" else ev.org_id
+        scope_label = ev.province if scope_type == "province" else str(ev.fields.get("org_name") or "")
         if not scope_key:
             scope_key = "unknown"
         for syn in map_syndromes(ev.diagnosis, ev.symptoms):
             if syn == "other" and not include_other:
                 continue
-            buckets[(ev.source, scope_type, scope_key, syn, freq, key_date)] += 1
+            buckets[(ev.source, scope_type, scope_key, scope_label, syn, freq, key_date)] += 1
 
     series = defaultdict(list)
-    for (source, scope_type, scope_key, syn, freq, key_date), cnt in buckets.items():
-        series[(source, scope_type, scope_key, syn, freq)].append((key_date, cnt))
+    for (source, scope_type, scope_key, scope_label, syn, freq, key_date), cnt in buckets.items():
+        series[(source, scope_type, scope_key, scope_label, syn, freq)].append((key_date, cnt))
 
     points: List[AggregatePoint] = []
-    for (source, scope_type, scope_key, syn, freq), pairs in series.items():
+    for (source, scope_type, scope_key, scope_label, syn, freq), pairs in series.items():
         pairs.sort()
         start = min(p[0] for p in pairs)
         end = max(p[0] for p in pairs)
@@ -62,6 +63,7 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
                     syndrome=syn,
                     date=_display_date(d, freq),
                     count=count_by_date.get(d, 0),
+                    scope_label=scope_label,
                 )
             )
 

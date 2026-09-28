@@ -159,7 +159,7 @@ async function load() {
   rows.forEach(x => {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td><span class="badge ${levelClass(x.level)}">${levelLabel(x.level)}</span></td>
-      <td>${escapeHtml(x.source)}</td><td>${escapeHtml(x.scope_key)}</td><td>${escapeHtml(x.syndrome)}</td>
+      <td>${escapeHtml(x.source)}</td><td>${escapeHtml((x.evidence || {}).scope_label || x.scope_key)}</td><td>${escapeHtml(x.syndrome)}</td>
       <td>${escapeHtml(x.date)}</td><td>${escapeHtml(x.observed)}</td><td>${escapeHtml(x.expected)}</td>
       <td class="expl">${explanationHtml(x)}</td>
       <td><button class="btn-sm" onclick="toggleDetail(this)">证据</button></td>`;
@@ -174,12 +174,18 @@ async function load() {
     tbody.appendChild(detail);
   });
   const latest = (runs.runs || [])[0];
+  let latestSummary = {};
+  try { latestSummary = latest ? JSON.parse(latest.summary || '{}') : {}; } catch (_) {}
+  const focusStatus = (latestSummary.source_readiness || {}).yichang_focus;
+  const focusStatusLabel = focusStatus === 'ok' ? '已就绪' :
+    (focusStatus === 'not_ready_for_alerting' ? '数据待补充' : (focusStatus || '未运行'));
   const metrics = document.getElementById('metrics');
   metrics.innerHTML = '';
   const items = [
     ['风险信号数', rows.length],
     ['最近运行', latest ? latest.run_id : '-'],
     ['健康检查', health.status || '-'],
+    ['宜昌重点场所', focusStatusLabel],
   ];
   items.forEach(([label, num]) => {
     const d = document.createElement('div');

@@ -28,13 +28,16 @@ def _read_xlsx(path: str) -> Iterator[Dict[str, str]]:
     except ImportError:
         return
     wb = load_workbook(path, read_only=True, data_only=True)
-    ws = wb.active
-    rows = ws.iter_rows(values_only=True)
-    header = [normalize_text(c) for c in next(rows, [])]
-    for i, values in enumerate(rows):
-        d = {header[j]: normalize_text(values[j]) for j in range(len(header))}
-        d["_index"] = str(i)
-        yield d
+    try:
+        ws = wb.active
+        rows = ws.iter_rows(values_only=True)
+        header = [normalize_text(c) for c in next(rows, [])]
+        for i, values in enumerate(rows):
+            d = {header[j]: normalize_text(values[j]) for j in range(len(header))}
+            d["_index"] = str(i)
+            yield d
+    finally:
+        wb.close()
 
 
 class Adapter:
