@@ -290,6 +290,50 @@ langgraph==0.3.34
 
 ## 8. 运行方法
 
+### 8.0 Linux/昇腾服务器一键启动
+
+在项目根目录执行：
+
+```bash
+bash scripts/start_all.sh
+```
+
+脚本会依次完成：
+
+1. 调用 `scripts/start_llm.sh`，加载CANN/ATB环境并启动LLM服务；
+2. 后台启动 `0.0.0.0:8080` 的风险展示页面和API；
+3. 执行 `python -m surveillance_agent run --inject --shape gradual --magnitude 10 --langgraph --autonomy-stage 3`；
+4. 把网页、LLM和流水线日志写入 `var/`；
+5. 打印VS Code端口转发、状态检查和停止命令。
+
+查看状态或停止后台服务：
+
+```bash
+bash scripts/status_all.sh
+bash scripts/stop_all.sh
+```
+
+常用自定义方式：
+
+```bash
+# 明确使用Transformers后端
+LLM_BACKEND=transformers bash scripts/start_all.sh
+
+# 使用vLLM Ascend和8路并发
+LLM_BACKEND=vllm LLM_CONCURRENCY=8 bash scripts/start_all.sh
+
+# 修改网页端口
+WEB_PORT=8081 bash scripts/start_all.sh
+
+# 只启动LLM和网页，不立即执行流水线
+RUN_PIPELINE=0 bash scripts/start_all.sh
+
+# 已有LLM服务，只启动网页并执行流水线
+START_LLM=0 bash scripts/start_all.sh
+```
+
+在服务器的VS Code中打开“端口/Ports”面板，转发脚本输出的Web端口（默认8080），再点击生成的转发地址。服务器上的 `127.0.0.1` 只代表服务器自身，不能直接在个人电脑浏览器中使用。
+
 ### 8.1 当前目录直接运行
 
 在 `code` 目录执行：
