@@ -4,6 +4,7 @@ import unittest
 
 from surveillance_agent.adapters import detect_adapter_from_file
 from surveillance_agent.adapters.care_home import CareHomeAdapter, HospitalAdapter
+from surveillance_agent.adapters.market import MarketAdapter
 from surveillance_agent.adapters.syndromes import map_syndromes
 from surveillance_agent.agent import MultiAgentCoordinator
 from surveillance_agent.agent.explanation import template_explain, validate_draft
@@ -24,6 +25,23 @@ class TestAdapters(unittest.TestCase):
         cfg = load_config()
         path = resolve_source_file(cfg, "care_home")
         self.assertIs(detect_adapter_from_file(str(path)), CareHomeAdapter)
+
+    def test_csv_institution_names_and_codes_are_preserved(self):
+        from surveillance_agent.adapters.base import read_rows
+        from surveillance_agent.utils import get_salt
+
+        cfg = load_config()
+        salt = get_salt(cfg["privacy"]["default_salt"])
+        care_row = next(read_rows(str(resolve_source_file(cfg, "care_home"))))
+        hospital_row = next(read_rows(str(resolve_source_file(cfg, "hospital"))))
+        care_event = CareHomeAdapter().parse(care_row, salt)
+        hospital_event = HospitalAdapter().parse(hospital_row, salt)
+
+        self.assertEqual(care_event.fields["org_name"], care_row["机构名称"])
+        self.assertEqual(care_event.fields["org_code"], care_row["机构编码"])
+        self.assertEqual(hospital_event.fields["org_code"], hospital_row["医疗机构组织代码"])
+        # The supplied medical CSV contains an institution code but no name column.
+        self.assertEqual(hospital_event.fields["org_name"], "")
 
     def test_syndrome_mapping(self):
         self.assertIn("respiratory", map_syndromes("流行性感冒"))
@@ -74,6 +92,36 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual([p.date for p in points], ["2026-10-09", "2026-10-12"])
         self.assertTrue(all(p.scope_type == "class" for p in points))
         self.assertTrue(all("三年级一班" in p.scope_label for p in points))
+
+    def test_school_makeup_day_overrides_weekend_exclusion(self):
+        from surveillance_agent.aggregation import aggregate
+        from surveillance_agent.domain import SurveillanceEvent
+
+        event = SurveillanceEvent(
+            event_id="s1", source="school", org_id="school-1", province="湖北省",
+            city="宜昌市", district="西陵区", event_date="2026-10-10",
+            diagnosis="咳嗽", symptoms="发热", fields={"org_name": "示例学校", "class_name": "三年级一班"},
+        )
+        points = aggregate(
+            [event],
+            {"school": {"scope_type": "class", "freq": "day", "exclude_weekends": True,
+                        "included_dates": ["2026-10-10"]}},
+        )
+        self.assertEqual([p.date for p in points], ["2026-10-10"])
+
+    def test_market_adapter_supports_daily_aggregate_counts(self):
+        from surveillance_agent.aggregation import aggregate
+
+        row = {
+            "市场编码": "M001", "市场名称": "示例农贸市场", "统计日期": "2026-10-09",
+            "症状": "咳嗽", "病例数": "6", "数据更新时间": "2026-10-09 17:00", "_index": "0",
+        }
+        self.assertTrue(MarketAdapter.recognizes(list(row)))
+        event = MarketAdapter().parse(row, "test-salt")
+        self.assertIsNotNone(event)
+        points = aggregate([event], {"market": {"scope_type": "org", "freq": "day"}})
+        self.assertEqual(points[0].count, 6)
+        self.assertEqual(points[0].context["place_code"], "M001")
 
     def test_hospital_comparison_is_separated_by_ward(self):
         from surveillance_agent.aggregation import aggregate
@@ -482,7 +530,9 @@ class TestImprovements(unittest.TestCase):
         self.assertIn("fetch('api/runs'", html)
         self.assertIn("function explanationHtml", html)
         self.assertIn("escapeHtml(visibleText)", html)
-        self.assertIn("宜昌重点场所", html)
+        self.assertIn("城市侧工作台", html)
+        self.assertIn("天眼摘要视图", html)
+        self.assertIn("setting_id_name", html)
 
     def test_extract_json_from_llm_output(self):
         from surveillance_agent.agent.llm import extract_json

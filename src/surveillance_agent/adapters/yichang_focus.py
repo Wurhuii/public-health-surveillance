@@ -188,6 +188,7 @@ def ingest_yichang_focus_bundle(
                 fields={
                     "place_type": place["place_type"],
                     "org_name": place["org_name"],
+                    "org_code": place["org_code"],
                     "care_resident_linked": place["place_type"] == "care_institution",
                     "setting": setting,
                     "ward": item.get("ward", ""),

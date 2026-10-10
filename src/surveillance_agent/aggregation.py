@@ -29,6 +29,10 @@ def _iter_dates(start: date, end: date, freq: str):
 
 def _excluded_school_date(d: date, scenario: Dict) -> bool:
     """Return true for dates that must not enter school baseline comparisons."""
+    # Education authorities may designate weekend make-up school days.  An
+    # explicit inclusion therefore has priority over the generic weekend rule.
+    if d.isoformat() in set(scenario.get("included_dates", [])):
+        return False
     if scenario.get("exclude_weekends", False) and d.weekday() >= 5:
         return True
     if d.isoformat() in set(scenario.get("excluded_dates", [])):
@@ -80,7 +84,11 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
             if syn == "other" and not include_other:
                 continue
             bucket_key = (ev.source, scope_type, scope_key, scope_label, syn, freq, key_date)
-            buckets[bucket_key] += 1
+            try:
+                event_count = max(1, int(float(ev.fields.get("event_count", 1))))
+            except (TypeError, ValueError):
+                event_count = 1
+            buckets[bucket_key] += event_count
             context = bucket_context.setdefault(
                 bucket_key,
                 {
@@ -94,7 +102,8 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
                     ),
                     "location": str(analysis_unit or ev.fields.get("location") or ""),
                     "analysis_unit": analysis_unit,
-                    "place_code": "",
+                    "place_code": str(ev.fields.get("org_code") or "") if scope_type != "province" else "",
+                    "place_type": str(ev.fields.get("place_type") or ""),
                     "setting": str(ev.fields.get("setting") or ""),
                     "care_resident_linked": bool(ev.fields.get("care_resident_linked", False)),
                     "latest_event_date": ev.event_date,

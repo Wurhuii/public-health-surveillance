@@ -482,8 +482,6 @@ class MultiAgentCoordinator:
             "school": "学校",
             "yichang_focus": yichang_setting,
         }.get(source, "重点场所")
-        if scope_type == "province":
-            setting_type = "区域"
         target = {
             "respiratory": "急性呼吸道症候群",
             "digestive": "消化道症候群",
@@ -561,6 +559,7 @@ class MultiAgentCoordinator:
             "location": context.get("location", ""),
             "analysis_unit": context.get("analysis_unit", ""),
             "place_code": context.get("place_code", ""),
+            "is_regional_aggregate": scope_type == "province",
             "warning_type": "风险预警" if scope_type == "province" else "苗头预警",
             "warning_level_scheme": "模型提示分层，业务颜色阈值待协和核定",
             "signal_name": signal_name,

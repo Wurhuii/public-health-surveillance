@@ -17,7 +17,7 @@ class CareHomeAdapter(Adapter):
     def parse(self, row: Dict[str, str], salt: str) -> Optional[SurveillanceEvent]:
         person_id = row.get("老人信息Id") or row.get("老人信息ID") or ""
         hospital_no = row.get("住院号") or ""
-        org_id = row.get("机构id") or row.get("机构编码id") or row.get("机构编码") or ""
+        org_id = row.get("机构编码") or row.get("机构编码id") or row.get("机构id") or ""
         org_name = row.get("机构名称") or ""
 
         if not person_id and not hospital_no:
@@ -42,6 +42,8 @@ class CareHomeAdapter(Adapter):
             symptoms=symptoms,
             fields={
                 "org_name": org_name,
+                "org_code": org_id,
+                "place_type": "care_home",
                 "status": row.get("状态") or "",
                 "longitude": row.get("经度") or "",
                 "latitude": row.get("维度") or "",
@@ -65,6 +67,7 @@ class HospitalAdapter(Adapter):
     def parse(self, row: Dict[str, str], salt: str) -> Optional[SurveillanceEvent]:
         visit_no = row.get("门诊流水号") or ""
         org_code = row.get("医疗机构组织代码") or row.get("机构") or ""
+        org_name = row.get("医疗机构名称") or row.get("机构名称") or ""
 
         event_date = parse_date(row.get("就诊日期"))
         if event_date is None:
@@ -83,7 +86,9 @@ class HospitalAdapter(Adapter):
             diagnosis=row.get("西医诊断名称") or "",
             symptoms=row.get("现病史") or "",
             fields={
-                "org_name": row.get("医疗机构名称") or row.get("机构名称") or org_code,
+                "org_name": org_name,
+                "org_code": org_code,
+                "place_type": "hospital",
                 "onset_date": to_iso(onset_date) if onset_date else "",
                 "department": row.get("科室名称") or "",
                 "ward": row.get("病区名称") or row.get("病区") or row.get("科室名称") or "",
@@ -134,6 +139,8 @@ class SchoolAdapter(Adapter):
             symptoms=symptoms,
             fields={
                 "org_name": org_name,
+                "org_code": row.get("学校编码") or row.get("机构编码") or "",
+                "place_type": "school",
                 "class_name": row.get("班级") or row.get("班级名称") or row.get("年级班级") or "",
                 "is_holiday": row.get("是否休假日") or row.get("休假日标记") or "",
             },

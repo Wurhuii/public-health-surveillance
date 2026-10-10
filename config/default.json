@@ -13,6 +13,10 @@
       "file": "school_symptom_processed.xlsx",
       "enabled": false
     },
+    "market": {
+      "file": "market_daily_report.csv",
+      "enabled": false
+    },
     "yichang_focus": {
       "file": "20260812 宜昌市样例数据",
       "enabled": true,
@@ -28,6 +32,7 @@
       "freq": "day",
       "expected_update_days": 31,
       "exclude_weekends": true,
+      "included_dates": [],
       "excluded_dates": [],
       "excluded_date_ranges": []
     },
