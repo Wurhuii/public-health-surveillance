@@ -87,6 +87,24 @@ def create_app():
         finally:
             storage.close()
 
+    @app.post("/api/signals/{signal_id}/review")
+    def review_signal(signal_id: str, body: Dict[str, Any]):
+        storage = Storage(_db_path())
+        try:
+            try:
+                return storage.update_signal_review(
+                    signal_id=signal_id,
+                    action=str(body.get("action", "")),
+                    result=str(body.get("result", "")),
+                    reason=str(body.get("reason", "")),
+                )
+            except KeyError:
+                return JSONResponse({"error": "signal_not_found"}, status_code=404)
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=422)
+        finally:
+            storage.close()
+
     return app
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict
 
 from ..config import PROJECT_ROOT, load_config
@@ -26,6 +27,7 @@ _OPENAPI_SPEC = {
             "post": {"summary": "启动一次处理", "responses": {"200": {"description": "ok"}}},
         },
         "/api/risks": {"get": {"summary": "查询风险结果", "responses": {"200": {"description": "ok"}}}},
+        "/api/signals/{signal_id}/review": {"post": {"summary": "更新信号核查状态", "responses": {"200": {"description": "ok"}}}},
     },
 }
 
@@ -71,6 +73,25 @@ class Handler:
                 autonomy_stage=payload.get("autonomy_stage", None),
             ).get("summary", {})
             return _json_response(summary)
+        review_match = re.fullmatch(r"/api/signals/([^/]+)/review", path)
+        if method == "POST" and review_match:
+            payload = json.loads(body.decode("utf-8")) if body else {}
+            storage = Storage(_db_path())
+            try:
+                try:
+                    result = storage.update_signal_review(
+                        signal_id=review_match.group(1),
+                        action=str(payload.get("action", "")),
+                        result=str(payload.get("result", "")),
+                        reason=str(payload.get("reason", "")),
+                    )
+                    return _json_response(result)
+                except KeyError:
+                    return _json_response({"error": "signal_not_found"}, 404)
+                except ValueError as exc:
+                    return _json_response({"error": str(exc)}, 422)
+            finally:
+                storage.close()
         if method == "GET" and path == "/docs":
             return self._serve_static("/static/swagger-ui/swagger.html")
         if method == "GET" and path == "/openapi.json":

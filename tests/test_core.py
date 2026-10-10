@@ -426,11 +426,22 @@ class TestEndToEnd(unittest.TestCase):
         storage = Storage(str(coord.run_dir.parent.parent / "surveillance.db"))
         try:
             saved = storage.query_signals(result["run_id"])
+            first_id = saved[0]["signal_id"]
+            started = storage.update_signal_review(first_id, "start")
+            reviewed = storage.update_signal_review(
+                first_id, "save", "异常属实待研判", "测试核查说明"
+            )
         finally:
             storage.close()
         self.assertEqual(len(saved), len(result["risk_signals"]))
         self.assertTrue(all(row["explanation"] for row in saved))
         self.assertTrue(all(row["explanation_source"] for row in saved))
+        self.assertTrue(all(row["evidence"]["presentation"].get("signal_code") for row in saved))
+        self.assertTrue(all(row["evidence"]["presentation"].get("evidence_items") for row in saved))
+        self.assertEqual(started["verification_status"], "核查中")
+        self.assertEqual(reviewed["verification_status"], "已核查")
+        self.assertEqual(reviewed["record_status"], "ACTIVE")
+        self.assertEqual(len(reviewed["change_log"]), 2)
 
     def test_messages_correlated(self):
         from surveillance_agent.utils import read_jsonl
@@ -566,13 +577,13 @@ class TestImprovements(unittest.TestCase):
         )
         self.assertNotIn("fetch('/api/", html)
         self.assertIn("fetch('api/runs'", html)
-        self.assertIn("fetch('api/institutions')", html)
-        self.assertIn("function explanationHtml", html)
-        self.assertIn("escapeHtml(visibleText)", html)
+        self.assertIn("api/signals/${encodeURIComponent(selected.signal_id)}/review", html)
+        self.assertIn("function explanation", html)
+        self.assertIn("evidence_items", html)
         self.assertIn("城市侧工作台", html)
         self.assertIn("天眼摘要视图", html)
         self.assertIn("setting_id_name", html)
-        self.assertIn("!==\'province\'", html)
+        self.assertNotIn("!==\'province\'", html)
 
     def test_default_focus_place_scopes_are_single_place(self):
         cfg = load_config()

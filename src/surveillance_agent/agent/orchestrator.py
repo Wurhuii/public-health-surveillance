@@ -30,6 +30,17 @@ BASE_ORDER = ["ingest", "aggregate", "inject", "detect", "fuse", "explain", "aud
 
 _LEVEL_RANK = {"high": 3, "medium": 2, "watch": 1, "normal": 0}
 
+_SIGNAL_CATALOG = {
+    "21": {"name": "医院病区急性呼吸道感染聚集线索", "setting_code": "HOS", "type_code": "E", "boundary": "医院病区内病例在短期窗口集中或持续异常升高。"},
+    "22": {"name": "农贸市场从业人员急性呼吸道症候群异常升高", "setting_code": "MKT", "type_code": "E", "boundary": "市场从业人员症候群监测值超过历史基线。"},
+    "23": {"name": "农贸市场从业人员传染病聚集线索", "setting_code": "MKT", "type_code": "E", "boundary": "需要传染病诊断或实验室结果支持；仅有症候数据时不生成。"},
+    "24": {"name": "养老机构入住老人急性呼吸道感染异常增多", "setting_code": "ELD", "type_code": "E", "boundary": "入住老人在机构内出现呼吸道事件异常增多。"},
+    "25": {"name": "养老机构外部呼吸道疫情输入风险", "setting_code": "ELD", "type_code": "R", "boundary": "需要周边医疗或社会面疫情与人员流动信息支持。"},
+    "26": {"name": "学校班级学生急性呼吸道症候群聚集事件", "setting_code": "SCH", "type_code": "E", "boundary": "同一班级在教学日窗口内集中出现呼吸道症候群。"},
+    "27": {"name": "学校学生呼吸道发病水平异常", "setting_code": "SCH", "type_code": "E", "boundary": "学校层面发病水平高于教学日历史基线。"},
+    "28": {"name": "跨学校社会面呼吸道疫情放大与延续风险", "setting_code": "REG", "type_code": "R", "boundary": "需要多学校或社会面数据共同支持，不代表单个学校暴发。"},
+}
+
 
 class MultiAgentCoordinator:
     def __init__(
@@ -450,6 +461,8 @@ class MultiAgentCoordinator:
                 dates=dates,
                 observed=observed,
                 expected=expected,
+                detector_results=det_res,
+                model_version=model_version,
                 context=next((v.get("context", {}) for v in det_res.values() if v.get("context")), {}),
             ),
         )
@@ -465,6 +478,8 @@ class MultiAgentCoordinator:
         dates: List[str],
         observed: float,
         expected: float,
+        detector_results: Dict[str, Dict[str, Any]],
+        model_version: str,
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Build the display fields agreed for focus-place warning signals."""
@@ -488,25 +503,22 @@ class MultiAgentCoordinator:
             "digestive": "消化道症候群",
             "fever": "发热症候群",
         }.get(syndrome, syndrome)
-        signal_names = {
-            ("hospital", "respiratory"): "院内急性呼吸道传染病聚集线索",
-            ("care_home", "respiratory"): "入住老人急性呼吸道传染病异常增多",
-            ("school", "respiratory"): "学生急性呼吸道症候群发病水平异常上升",
-        }
-        if source == "yichang_focus" and syndrome == "respiratory":
-            signal_name = (
-                "入住老人急性呼吸道传染病异常增多"
-                if setting_type == "养老机构"
-                else "院内急性呼吸道传染病聚集线索"
-            )
-        else:
-            signal_name = signal_names.get((source, syndrome), f"{setting_type}{target}监测异常线索")
         if scope_type == "province":
-            signal_name = (
-                "社会面呼吸道传染病疫情放大与延续风险"
-                if syndrome == "respiratory"
-                else f"区域{target}监测异常风险"
-            )
+            signal_code = "28"
+        elif setting_type == "医疗机构":
+            signal_code = "21"
+        elif setting_type == "农贸市场":
+            signal_code = "22"
+        elif setting_type == "养老机构":
+            signal_code = "24"
+        elif setting_type == "学校" and scope_type == "class":
+            signal_code = "26"
+        elif setting_type == "学校":
+            signal_code = "27"
+        else:
+            signal_code = "21"
+        catalog = _SIGNAL_CATALOG[signal_code]
+        signal_name = catalog["name"]
         ratio = observed / max(expected, 0.5)
         if scope_type == "ward":
             if len(dates) >= 2:
@@ -528,6 +540,31 @@ class MultiAgentCoordinator:
                 if len(dates) >= 2
                 else "农贸市场从业人员急性呼吸道症候群异常升高"
             )
+
+        source_labels = {
+            "hospital": "医疗机构诊疗监测数据",
+            "care_home": "养老机构健康监测数据",
+            "school": "学校晨午检与缺勤监测数据",
+            "market": "农贸市场从业人员健康监测数据",
+            "yichang_focus": "宜昌重点场所多来源监测数据",
+        }
+        related = {
+            "24": ["25"], "25": ["24"], "26": ["27", "28"],
+            "27": ["26", "28"], "28": ["26", "27"],
+        }.get(signal_code, [])
+        evidence_items = [
+            {"name": "监测事件数", "value": round(observed, 4), "unit": "例", "role": "observed"},
+            {"name": "模型预期值", "value": round(expected, 4), "unit": "例", "role": "expected"},
+            {"name": "观察/预期比", "value": round(observed / max(expected, 0.5), 4), "unit": "倍", "role": "ratio"},
+        ]
+        for detector, result in sorted(detector_results.items()):
+            evidence_items.append({
+                "name": detector.upper(),
+                "value": round(float(result.get("score", 0.0)), 4),
+                "threshold": round(float(result.get("threshold", 0.0)), 4),
+                "alarm": bool(result.get("alarm")),
+                "role": "detector",
+            })
 
         latest = str(context.get("latest_update_time") or context.get("latest_event_date") or date_value)
         update_date = None
@@ -558,15 +595,25 @@ class MultiAgentCoordinator:
             "setting_type": setting_type,
             "place_name": place_name,
             "location": context.get("location", ""),
+            "address": context.get("address", context.get("location", "")),
+            "area_code": context.get("area_code", ""),
             "analysis_unit": context.get("analysis_unit", ""),
             "place_code": context.get("place_code", ""),
             "is_regional_aggregate": scope_type == "province",
             "contributing_places": context.get("contributing_places", []),
             "contributing_place_count": context.get("contributing_place_count", 0),
-            "warning_type": "风险预警" if scope_type == "province" else "苗头预警",
+            "signal_code": signal_code,
+            "signal_catalog_name": catalog["name"],
+            "catalog_setting_code": catalog["setting_code"],
+            "catalog_type_code": catalog["type_code"],
+            "catalog_boundary": catalog["boundary"],
+            "warning_type": "风险预警" if catalog["type_code"] == "R" else "苗头预警",
             "warning_level_scheme": "模型提示分层，业务颜色阈值待协和核定",
             "signal_name": signal_name,
             "verification_status": "待核查",
+            "verification_result": "",
+            "record_status": "ACTIVE",
+            "update_seq": 1,
             "monitored_target": target,
             "source_type": (
                 "多源综合" if context.get("care_resident_linked")
@@ -574,7 +621,15 @@ class MultiAgentCoordinator:
                 else "社会面疫情"
             ),
             "monitoring_window": f"{min(dates)} 至 {max(dates)}" if len(dates) > 1 else date_value,
+            "window_start": min(dates),
+            "window_end": max(dates),
+            "window_basis": "自然日连续窗口" if source != "school" else "教学日窗口（休假日剔除）",
             "key_indicator": f"监测值 {observed:g} 例，模型预期 {expected:g} 例",
+            "evidence_items": evidence_items,
+            "source_details": source_labels.get(source, source),
+            "rule_id": f"RULE-{signal_code}-ENSEMBLE",
+            "rule_version": model_version,
+            "rule_status": "待业务验证",
             "verification_hint": "请核对病例明细、统计时段、数据完整性及场所内时空聚集情况。系统信号不代表已确认聚集或暴发。",
             "comparison_policy": (
                 "仅纳入教学日，周末、寒暑假和节假日不进入基线比较"
@@ -597,6 +652,17 @@ class MultiAgentCoordinator:
             "expected_update_interval_days": expected_days,
             "data_delay_days": delay_days,
             "data_status": "延迟" if delayed else "正常",
+            "report_time": "",
+            "related_signal_codes": related,
+            "missing_fields": [
+                name for name, value in {
+                    "行政区划编码": context.get("area_code", ""),
+                    "场所编号": context.get("place_code", ""),
+                    "详细地址": context.get("address", context.get("location", "")),
+                }.items() if not value
+            ],
+            "map_longitude": context.get("longitude", ""),
+            "map_latitude": context.get("latitude", ""),
         }
 
     def _task_explain(self) -> Dict:
