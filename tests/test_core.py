@@ -549,11 +549,29 @@ class TestImprovements(unittest.TestCase):
         )
         self.assertNotIn("fetch('/api/", html)
         self.assertIn("fetch('api/runs'", html)
+        self.assertIn("fetch('api/institutions')", html)
         self.assertIn("function explanationHtml", html)
         self.assertIn("escapeHtml(visibleText)", html)
         self.assertIn("城市侧工作台", html)
         self.assertIn("天眼摘要视图", html)
         self.assertIn("setting_id_name", html)
+
+    def test_institution_catalog_reads_names_and_codes_from_csv(self):
+        from surveillance_agent.api.institution_catalog import load_institution_catalog
+
+        catalog = load_institution_catalog()
+        self.assertTrue(catalog["care_home"])
+        self.assertTrue(all(item["name"] and item["code"] for item in catalog["care_home"]))
+        self.assertTrue(catalog["hospital"])
+        self.assertTrue(all(item["code"] for item in catalog["hospital"]))
+
+    def test_fallback_server_exposes_institution_catalog(self):
+        import json
+        from surveillance_agent.api.fallback_server import Handler
+
+        status, payload = Handler().dispatch("GET", "/api/institutions", b"")
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(payload)["institutions"]["care_home"])
 
     def test_extract_json_from_llm_output(self):
         from surveillance_agent.agent.llm import extract_json

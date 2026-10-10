@@ -6,6 +6,7 @@ from typing import Any, Dict
 from ..config import PROJECT_ROOT, load_config
 from ..storage import Storage
 from . import _run_once
+from .institution_catalog import load_institution_catalog
 
 
 def _db_path() -> str:
@@ -19,6 +20,7 @@ _OPENAPI_SPEC = {
         "/api/health": {"get": {"summary": "健康检查", "responses": {"200": {"description": "ok"}}}},
         "/api/config": {"get": {"summary": "查询配置", "responses": {"200": {"description": "ok"}}}},
         "/api/agents": {"get": {"summary": "查询Agent角色", "responses": {"200": {"description": "ok"}}}},
+        "/api/institutions": {"get": {"summary": "查询机构名称与编号", "responses": {"200": {"description": "ok"}}}},
         "/api/runs": {
             "get": {"summary": "查询运行记录", "responses": {"200": {"description": "ok"}}},
             "post": {"summary": "启动一次处理", "responses": {"200": {"description": "ok"}}},
@@ -45,6 +47,8 @@ class Handler:
         if method == "GET" and path == "/api/agents":
             from ..agent import list_roles
             return _json_response({"agents": list_roles()})
+        if method == "GET" and path == "/api/institutions":
+            return _json_response({"institutions": load_institution_catalog()})
         if method == "GET" and path == "/api/runs":
             storage = Storage(_db_path())
             try:

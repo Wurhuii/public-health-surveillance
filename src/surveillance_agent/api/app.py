@@ -6,6 +6,7 @@ from typing import Any, Dict
 from ..config import PROJECT_ROOT, load_config
 from ..storage import Storage
 from . import _run_once
+from .institution_catalog import load_institution_catalog
 
 
 def _db_path() -> str:
@@ -54,6 +55,10 @@ def create_app():
     def agents():
         from ..agent import list_roles
         return {"agents": list_roles()}
+
+    @app.get("/api/institutions")
+    def institutions():
+        return {"institutions": load_institution_catalog()}
 
     @app.post("/api/runs")
     def start_run(body: Dict[str, Any]):
