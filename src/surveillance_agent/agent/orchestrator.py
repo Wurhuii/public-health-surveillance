@@ -560,6 +560,8 @@ class MultiAgentCoordinator:
             "analysis_unit": context.get("analysis_unit", ""),
             "place_code": context.get("place_code", ""),
             "is_regional_aggregate": scope_type == "province",
+            "contributing_places": context.get("contributing_places", []),
+            "contributing_place_count": context.get("contributing_place_count", 0),
             "warning_type": "风险预警" if scope_type == "province" else "苗头预警",
             "warning_level_scheme": "模型提示分层，业务颜色阈值待协和核定",
             "signal_name": signal_name,

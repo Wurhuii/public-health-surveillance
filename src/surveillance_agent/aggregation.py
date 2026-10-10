@@ -108,8 +108,15 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
                     "care_resident_linked": bool(ev.fields.get("care_resident_linked", False)),
                     "latest_event_date": ev.event_date,
                     "latest_update_time": str(ev.fields.get("update_time") or ev.event_date),
+                    "contributing_places": [],
                 },
             )
+            place_identity = {
+                "name": str(ev.fields.get("org_name") or ""),
+                "code": str(ev.fields.get("org_code") or ""),
+            }
+            if any(place_identity.values()) and place_identity not in context["contributing_places"]:
+                context["contributing_places"].append(place_identity)
             if ev.event_date > context.get("latest_event_date", ""):
                 context["latest_event_date"] = ev.event_date
             update_time = str(ev.fields.get("update_time") or ev.event_date)
@@ -132,11 +139,28 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
         series_context = dict(pairs[-1][2])
         series_context["latest_event_date"] = max(p[2].get("latest_event_date", "") for p in pairs)
         series_context["latest_update_time"] = max(p[2].get("latest_update_time", "") for p in pairs)
+        all_places = {
+            (place.get("name", ""), place.get("code", ""))
+            for _, _, item_context in pairs
+            for place in item_context.get("contributing_places", [])
+            if place.get("name") or place.get("code")
+        }
+        sorted_places = sorted(all_places, key=lambda item: (item[0], item[1]))
+        series_context["contributing_place_count"] = len(sorted_places)
+        series_context["contributing_places"] = [
+            {"name": name, "code": code} for name, code in sorted_places[:20]
+        ]
         for d in _iter_dates(start, end, freq):
             if source == "school" and _excluded_school_date(d, scenarios.get(source, {})):
                 continue
             point_context = dict(context_by_date.get(d, series_context))
             point_context["latest_event_date"] = series_context["latest_event_date"]
+            point_context["latest_update_time"] = series_context["latest_update_time"]
+            point_context["contributing_places"] = sorted(
+                point_context.get("contributing_places", []),
+                key=lambda item: (item.get("name", ""), item.get("code", "")),
+            )
+            point_context["contributing_place_count"] = len(point_context.get("contributing_places", []))
             points.append(
                 AggregatePoint(
                     source=source,

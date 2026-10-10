@@ -73,6 +73,26 @@ class TestAdapters(unittest.TestCase):
         points2 = aggregate(events, scenarios, include_other=True)
         self.assertTrue(any(p.syndrome == "other" for p in points2))
 
+    def test_regional_aggregate_keeps_csv_institution_catalog(self):
+        from surveillance_agent.aggregation import aggregate
+        from surveillance_agent.domain import SurveillanceEvent
+
+        events = [
+            SurveillanceEvent(
+                event_id=f"c{i}", source="care_home", org_id=f"o{i}", province="湖北省",
+                city="宜昌市", district="", event_date="2026-10-09",
+                diagnosis="流行性感冒", symptoms="咳嗽",
+                fields={"org_name": name, "org_code": code, "place_type": "care_home"},
+            )
+            for i, (name, code) in enumerate((("甲养老院", "F001"), ("乙养老院", "F002")))
+        ]
+        point = aggregate(events, {"care_home": {"scope_type": "province", "freq": "day"}})[0]
+        self.assertEqual(point.context["contributing_place_count"], 2)
+        self.assertEqual(
+            point.context["contributing_places"],
+            [{"name": "乙养老院", "code": "F002"}, {"name": "甲养老院", "code": "F001"}],
+        )
+
     def test_school_comparison_skips_weekends_and_groups_by_class(self):
         from surveillance_agent.aggregation import aggregate
         from surveillance_agent.domain import SurveillanceEvent
