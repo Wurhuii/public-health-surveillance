@@ -107,10 +107,14 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
                     "setting": str(ev.fields.get("setting") or ""),
                     "care_resident_linked": bool(ev.fields.get("care_resident_linked", False)),
                     "latest_event_date": ev.event_date,
+                    "latest_update_time": str(ev.fields.get("update_time") or ev.event_date),
                 },
             )
             if ev.event_date > context.get("latest_event_date", ""):
                 context["latest_event_date"] = ev.event_date
+            update_time = str(ev.fields.get("update_time") or ev.event_date)
+            if update_time > context.get("latest_update_time", ""):
+                context["latest_update_time"] = update_time
 
     series = defaultdict(list)
     for (source, scope_type, scope_key, scope_label, syn, freq, key_date), cnt in buckets.items():
@@ -127,6 +131,7 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
         context_by_date = {p[0]: p[2] for p in pairs}
         series_context = dict(pairs[-1][2])
         series_context["latest_event_date"] = max(p[2].get("latest_event_date", "") for p in pairs)
+        series_context["latest_update_time"] = max(p[2].get("latest_update_time", "") for p in pairs)
         for d in _iter_dates(start, end, freq):
             if source == "school" and _excluded_school_date(d, scenarios.get(source, {})):
                 continue

@@ -122,6 +122,7 @@ class TestAdapters(unittest.TestCase):
         points = aggregate([event], {"market": {"scope_type": "org", "freq": "day"}})
         self.assertEqual(points[0].count, 6)
         self.assertEqual(points[0].context["place_code"], "M001")
+        self.assertEqual(points[0].context["latest_update_time"], "2026-10-09 17:00")
 
     def test_hospital_comparison_is_separated_by_ward(self):
         from surveillance_agent.aggregation import aggregate

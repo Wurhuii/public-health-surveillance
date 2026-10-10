@@ -528,7 +528,7 @@ class MultiAgentCoordinator:
                 else "农贸市场从业人员急性呼吸道症候群异常升高"
             )
 
-        latest = str(context.get("latest_event_date") or date_value)
+        latest = str(context.get("latest_update_time") or context.get("latest_event_date") or date_value)
         update_date = None
         try:
             update_date = date.fromisoformat(latest[:10])
