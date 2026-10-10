@@ -158,6 +158,7 @@ def ingest_yichang_focus_bundle(
                 "symptoms": " ".join(
                     x for x in (record.get("zhusu"), record.get("xianbingshi")) if x
                 ),
+                "ward": _first(row, ("bingqumingcheng", "keshimingcheng")),
             },
         )
         diagnosis = " ".join(x for x in (row.get("jbzdbm"), row.get("jbzdmc")) if x)
@@ -189,6 +190,7 @@ def ingest_yichang_focus_bundle(
                     "org_name": place["org_name"],
                     "care_resident_linked": place["place_type"] == "care_institution",
                     "setting": setting,
+                    "ward": item.get("ward", ""),
                 },
             )
         )

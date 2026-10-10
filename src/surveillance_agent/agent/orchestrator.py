@@ -355,6 +355,8 @@ class MultiAgentCoordinator:
 
         series_map = defaultdict(list)
         for dp in self.state["detector_points"]:
+            if dp.syndrome != "respiratory":
+                continue
             series_map[(dp.source, dp.scope_type, dp.scope_key, dp.syndrome)].append(dp)
 
         signals: List[RiskSignal] = []
@@ -468,7 +470,7 @@ class MultiAgentCoordinator:
         """Build the display fields agreed for focus-place warning signals."""
         from datetime import date, datetime
 
-        yichang_setting = {
+        yichang_setting = "养老机构" if context.get("care_resident_linked") else {
             "outpatient": "医疗机构",
             "inpatient": "医疗机构",
             "elderly": "养老机构",
@@ -506,6 +508,27 @@ class MultiAgentCoordinator:
                 if syndrome == "respiratory"
                 else f"区域{target}监测异常风险"
             )
+        ratio = observed / max(expected, 0.5)
+        if scope_type == "ward":
+            if len(dates) >= 2:
+                signal_name = "医院病区急性呼吸道症候群持续异常升高"
+            elif observed >= 3 and ratio >= 2:
+                signal_name = "医院病区急性呼吸道病例短期聚集线索"
+            else:
+                signal_name = "医院病区急性呼吸道症候群异常升高"
+        elif scope_type == "class":
+            if len(dates) >= 2:
+                signal_name = "班级急性呼吸道症候群连续集中出现"
+            elif observed >= 3 and ratio >= 2:
+                signal_name = "班级急性呼吸道症候群病例集中聚集线索"
+            else:
+                signal_name = "班级急性呼吸道症候群发病水平异常上升"
+        elif source == "market":
+            signal_name = (
+                "农贸市场从业人员急性呼吸道症候群连续异常升高"
+                if len(dates) >= 2
+                else "农贸市场从业人员急性呼吸道症候群异常升高"
+            )
 
         latest = str(context.get("latest_event_date") or date_value)
         update_date = None
@@ -536,15 +559,38 @@ class MultiAgentCoordinator:
             "setting_type": setting_type,
             "place_name": place_name,
             "location": context.get("location", ""),
+            "analysis_unit": context.get("analysis_unit", ""),
+            "place_code": context.get("place_code", ""),
             "warning_type": "风险预警" if scope_type == "province" else "苗头预警",
             "warning_level_scheme": "模型提示分层，业务颜色阈值待协和核定",
             "signal_name": signal_name,
             "verification_status": "待核查",
             "monitored_target": target,
-            "source_type": "场所相关人群异常" if scope_type == "org" else "社会面疫情",
+            "source_type": (
+                "多源综合" if context.get("care_resident_linked")
+                else "场所相关人群异常" if scope_type != "province"
+                else "社会面疫情"
+            ),
             "monitoring_window": f"{min(dates)} 至 {max(dates)}" if len(dates) > 1 else date_value,
             "key_indicator": f"监测值 {observed:g} 例，模型预期 {expected:g} 例",
             "verification_hint": "请核对病例明细、统计时段、数据完整性及场所内时空聚集情况。系统信号不代表已确认聚集或暴发。",
+            "comparison_policy": (
+                "仅纳入教学日，周末、寒暑假和节假日不进入基线比较"
+                if source == "school"
+                else "按连续监测周期与历史基线比较"
+            ),
+            "identity_linkage": (
+                "已通过不可逆脱敏身份键关联，医疗病例已归并至对应养老机构"
+                if context.get("care_resident_linked")
+                else "未发现可用于跨机构归并的共享不可逆脱敏身份键"
+                if setting_type == "养老机构"
+                else "不适用"
+            ),
+            "data_update_rule": (
+                f"每日固定于上班时段 {self.cfg.get('scenarios', {}).get(source, {}).get('scheduled_update_time')} 更新"
+                if source == "market"
+                else f"预期每 {expected_days} 天至少更新一次"
+            ),
             "data_updated_at": latest,
             "expected_update_interval_days": expected_days,
             "data_delay_days": delay_days,

@@ -27,19 +27,55 @@ def _iter_dates(start: date, end: date, freq: str):
         cur += timedelta(days=step)
 
 
+def _excluded_school_date(d: date, scenario: Dict) -> bool:
+    """Return true for dates that must not enter school baseline comparisons."""
+    if scenario.get("exclude_weekends", False) and d.weekday() >= 5:
+        return True
+    if d.isoformat() in set(scenario.get("excluded_dates", [])):
+        return True
+    for item in scenario.get("excluded_date_ranges", []):
+        try:
+            if date.fromisoformat(item["start"]) <= d <= date.fromisoformat(item["end"]):
+                return True
+        except (KeyError, TypeError, ValueError):
+            continue
+    return False
+
+
+def _scope(ev: SurveillanceEvent, scope_type: str):
+    org_name = str(ev.fields.get("org_name") or "")
+    if scope_type == "province":
+        return ev.province or "unknown", ev.province or "区域待补充", ""
+    if scope_type == "ward":
+        ward = str(ev.fields.get("ward") or ev.fields.get("department") or "病区待补充")
+        return f"{ev.org_id}:{ward}", f"{org_name or '医疗机构名称待补充'} / {ward}", ward
+    if scope_type == "class":
+        class_name = str(ev.fields.get("class_name") or "班级待补充")
+        return f"{ev.org_id}:{class_name}", f"{org_name or '学校名称待补充'} / {class_name}", class_name
+    return ev.org_id or "unknown", org_name or "场所名称待补充", ""
+
+
 def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: bool = False) -> List[AggregatePoint]:
     buckets = defaultdict(int)
     bucket_context = {}
     for ev in events:
         sc = scenarios.get(ev.source, {})
         scope_type = sc.get("scope_type", "province")
+        if (
+            ev.source == "yichang_focus"
+            and ev.fields.get("setting") == "inpatient"
+            and ev.fields.get("place_type") != "care_institution"
+        ):
+            scope_type = "ward"
         freq = sc.get("freq", "week")
         d = date.fromisoformat(ev.event_date)
+        if ev.source == "school" and (
+            _excluded_school_date(d, sc)
+            or str(ev.fields.get("is_holiday", "")).lower() in {"1", "true", "yes", "是"}
+        ):
+            continue
         key_date = _week_start(d) if freq == "week" else d
-        scope_key = ev.province if scope_type == "province" else ev.org_id
-        scope_label = ev.province if scope_type == "province" else str(ev.fields.get("org_name") or "")
-        if not scope_key:
-            scope_key = "unknown"
+        scope_key, scope_label, analysis_unit = _scope(ev, scope_type)
         for syn in map_syndromes(ev.diagnosis, ev.symptoms):
             if syn == "other" and not include_other:
                 continue
@@ -52,12 +88,15 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
                     "city": ev.city,
                     "district": ev.district,
                     "place_name": str(
-                        (ev.fields.get("org_name") if scope_type == "org" else "")
+                        (ev.fields.get("org_name") if scope_type != "province" else "")
                         or scope_label
                         or scope_key
                     ),
-                    "location": str(ev.fields.get("location") or ev.fields.get("department") or ""),
+                    "location": str(analysis_unit or ev.fields.get("location") or ""),
+                    "analysis_unit": analysis_unit,
+                    "place_code": "",
                     "setting": str(ev.fields.get("setting") or ""),
+                    "care_resident_linked": bool(ev.fields.get("care_resident_linked", False)),
                     "latest_event_date": ev.event_date,
                 },
             )
@@ -80,6 +119,8 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
         series_context = dict(pairs[-1][2])
         series_context["latest_event_date"] = max(p[2].get("latest_event_date", "") for p in pairs)
         for d in _iter_dates(start, end, freq):
+            if source == "school" and _excluded_school_date(d, scenarios.get(source, {})):
+                continue
             point_context = dict(context_by_date.get(d, series_context))
             point_context["latest_event_date"] = series_context["latest_event_date"]
             points.append(

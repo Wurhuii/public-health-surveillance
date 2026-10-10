@@ -55,6 +55,42 @@ class TestAdapters(unittest.TestCase):
         points2 = aggregate(events, scenarios, include_other=True)
         self.assertTrue(any(p.syndrome == "other" for p in points2))
 
+    def test_school_comparison_skips_weekends_and_groups_by_class(self):
+        from surveillance_agent.aggregation import aggregate
+        from surveillance_agent.domain import SurveillanceEvent
+
+        events = [
+            SurveillanceEvent(
+                event_id=f"s{i}", source="school", org_id="school-1", province="湖北省",
+                city="宜昌市", district="西陵区", event_date=day,
+                diagnosis="咳嗽", symptoms="发热", fields={"org_name": "示例学校", "class_name": "三年级一班"},
+            )
+            for i, day in enumerate(("2026-10-09", "2026-10-10", "2026-10-12"))
+        ]
+        points = aggregate(
+            events,
+            {"school": {"scope_type": "class", "freq": "day", "exclude_weekends": True}},
+        )
+        self.assertEqual([p.date for p in points], ["2026-10-09", "2026-10-12"])
+        self.assertTrue(all(p.scope_type == "class" for p in points))
+        self.assertTrue(all("三年级一班" in p.scope_label for p in points))
+
+    def test_hospital_comparison_is_separated_by_ward(self):
+        from surveillance_agent.aggregation import aggregate
+        from surveillance_agent.domain import SurveillanceEvent
+
+        events = [
+            SurveillanceEvent(
+                event_id=f"h{i}", source="hospital", org_id="hospital-1", province="湖北省",
+                city="宜昌市", district="西陵区", event_date="2026-10-09",
+                diagnosis="流行性感冒", symptoms="咳嗽", fields={"org_name": "示例医院", "ward": ward},
+            )
+            for i, ward in enumerate(("呼吸一区", "呼吸二区"))
+        ]
+        points = aggregate(events, {"hospital": {"scope_type": "ward", "freq": "day"}})
+        self.assertEqual(len({p.scope_key for p in points}), 2)
+        self.assertTrue(all(p.context["analysis_unit"].startswith("呼吸") for p in points))
+
     def test_events_generated_and_unique(self):
         cfg = load_config()
         salt = get_salt(cfg["privacy"]["default_salt"])
@@ -388,6 +424,22 @@ class TestImprovements(unittest.TestCase):
         sigs = coord.state["risk_signals"]
         self.assertEqual(len(sigs), 1)
         self.assertEqual(sigs[0].evidence.run_dates, ["2026-W01", "2026-W02", "2026-W03"])
+
+    def test_warning_output_is_limited_to_respiratory_signals(self):
+        from surveillance_agent.domain import DetectorPoint
+
+        coord = MultiAgentCoordinator(cfg=load_config(), autonomy_stage=0)
+        coord.state["detector_points"] = [
+            DetectorPoint(
+                source="school", scope_type="class", scope_key=f"class-{syndrome}",
+                syndrome=syndrome, date="2026-10-09", observed=12.0, expected=2.0,
+                score=5.0, threshold=3.0, detector="shewhart", alarm=True,
+                scope_label="示例学校 / 三年级一班",
+            )
+            for syndrome in ("respiratory", "digestive")
+        ]
+        coord._task_fuse()
+        self.assertEqual([s.evidence.syndrome for s in coord.state["risk_signals"]], ["respiratory"])
 
     def test_audit_fallback_writeback(self):
         cfg = load_config()

@@ -22,9 +22,17 @@
   },
   "scenarios": {
     "care_home": {"scope_type": "province", "freq": "week", "expected_update_days": 7},
-    "hospital": {"scope_type": "province", "freq": "week", "expected_update_days": 1},
-    "school": {"scope_type": "org", "freq": "day", "expected_update_days": 31},
-    "yichang_focus": {"scope_type": "org", "freq": "day", "expected_update_days": 1}
+    "hospital": {"scope_type": "ward", "freq": "week", "expected_update_days": 1},
+    "school": {
+      "scope_type": "class",
+      "freq": "day",
+      "expected_update_days": 31,
+      "exclude_weekends": true,
+      "excluded_dates": [],
+      "excluded_date_ranges": []
+    },
+    "yichang_focus": {"scope_type": "org", "freq": "day", "expected_update_days": 1},
+    "market": {"scope_type": "org", "freq": "day", "expected_update_days": 1, "scheduled_update_time": "17:00"}
   },
   "aggregation": {
     "include_other": false

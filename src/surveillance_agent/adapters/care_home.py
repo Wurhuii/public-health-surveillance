@@ -86,6 +86,7 @@ class HospitalAdapter(Adapter):
                 "org_name": row.get("医疗机构名称") or row.get("机构名称") or org_code,
                 "onset_date": to_iso(onset_date) if onset_date else "",
                 "department": row.get("科室名称") or "",
+                "ward": row.get("病区名称") or row.get("病区") or row.get("科室名称") or "",
                 "gender": row.get("性别") or "",
                 "age": row.get("年龄") or "",
             },
@@ -131,7 +132,11 @@ class SchoolAdapter(Adapter):
             event_date=to_iso(event_date),
             diagnosis=diagnosis,
             symptoms=symptoms,
-            fields={"org_name": org_name},
+            fields={
+                "org_name": org_name,
+                "class_name": row.get("班级") or row.get("班级名称") or row.get("年级班级") or "",
+                "is_holiday": row.get("是否休假日") or row.get("休假日标记") or "",
+            },
         )
 
     def quality_issues(self, row: Dict[str, str]) -> List[str]:
