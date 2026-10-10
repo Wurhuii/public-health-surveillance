@@ -21,10 +21,10 @@
     }
   },
   "scenarios": {
-    "care_home": {"scope_type": "province", "freq": "week"},
-    "hospital": {"scope_type": "province", "freq": "week"},
-    "school": {"scope_type": "org", "freq": "day"},
-    "yichang_focus": {"scope_type": "org", "freq": "day"}
+    "care_home": {"scope_type": "province", "freq": "week", "expected_update_days": 7},
+    "hospital": {"scope_type": "province", "freq": "week", "expected_update_days": 1},
+    "school": {"scope_type": "org", "freq": "day", "expected_update_days": 31},
+    "yichang_focus": {"scope_type": "org", "freq": "day", "expected_update_days": 1}
   },
   "aggregation": {
     "include_other": false

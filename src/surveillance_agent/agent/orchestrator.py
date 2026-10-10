@@ -259,6 +259,7 @@ class MultiAgentCoordinator:
                     date=p.date,
                     count=max(p.count, 1) + int(p.count * magnitude),
                     scope_label=p.scope_label,
+                    context=dict(p.context),
                 )
                 modified[id(p)] = injected
                 injections.append(
@@ -339,6 +340,7 @@ class MultiAgentCoordinator:
                             detector=name,
                             alarm=alarm,
                             scope_label=series[i].scope_label,
+                            context=dict(series[i].context),
                         )
                     )
 
@@ -367,6 +369,7 @@ class MultiAgentCoordinator:
                     "alarm": dp.alarm,
                     "observed": dp.observed,
                     "scope_label": dp.scope_label,
+                    "context": dp.context,
                 }
             dates = sorted(by_date.keys())
 
@@ -436,8 +439,117 @@ class MultiAgentCoordinator:
             scope_label=next((v.get("scope_label", "") for v in det_res.values() if v.get("scope_label")), ""),
             quality_limits=[],
             run_dates=sorted(dates),
+            presentation=self._build_presentation(
+                source=source,
+                scope_type=scope_type,
+                scope_key=scope_key,
+                syndrome=syndrome,
+                date_value=rep_date,
+                dates=dates,
+                observed=observed,
+                expected=expected,
+                context=next((v.get("context", {}) for v in det_res.values() if v.get("context")), {}),
+            ),
         )
         return RiskSignal(signal_id=evidence.signal_id, level=level, evidence=evidence)
+
+    def _build_presentation(
+        self,
+        source: str,
+        scope_type: str,
+        scope_key: str,
+        syndrome: str,
+        date_value: str,
+        dates: List[str],
+        observed: float,
+        expected: float,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Build the display fields agreed for focus-place warning signals."""
+        from datetime import date, datetime
+
+        yichang_setting = {
+            "outpatient": "医疗机构",
+            "inpatient": "医疗机构",
+            "elderly": "养老机构",
+            "school": "学校",
+        }.get(context.get("setting"), "重点场所")
+        setting_type = {
+            "hospital": "医疗机构",
+            "care_home": "养老机构",
+            "school": "学校",
+            "yichang_focus": yichang_setting,
+        }.get(source, "重点场所")
+        if scope_type == "province":
+            setting_type = "区域"
+        target = {
+            "respiratory": "急性呼吸道症候群",
+            "digestive": "消化道症候群",
+            "fever": "发热症候群",
+        }.get(syndrome, syndrome)
+        signal_names = {
+            ("hospital", "respiratory"): "院内急性呼吸道传染病聚集线索",
+            ("care_home", "respiratory"): "入住老人急性呼吸道传染病异常增多",
+            ("school", "respiratory"): "学生急性呼吸道症候群发病水平异常上升",
+        }
+        if source == "yichang_focus" and syndrome == "respiratory":
+            signal_name = (
+                "入住老人急性呼吸道传染病异常增多"
+                if setting_type == "养老机构"
+                else "院内急性呼吸道传染病聚集线索"
+            )
+        else:
+            signal_name = signal_names.get((source, syndrome), f"{setting_type}{target}监测异常线索")
+        if scope_type == "province":
+            signal_name = (
+                "社会面呼吸道传染病疫情放大与延续风险"
+                if syndrome == "respiratory"
+                else f"区域{target}监测异常风险"
+            )
+
+        latest = str(context.get("latest_event_date") or date_value)
+        update_date = None
+        try:
+            update_date = date.fromisoformat(latest[:10])
+        except ValueError:
+            try:
+                year, week = latest.split("-W", 1)
+                update_date = date.fromisocalendar(int(year), int(week), 7)
+            except (ValueError, TypeError):
+                pass
+        expected_days = int(
+            self.cfg.get("scenarios", {}).get(source, {}).get(
+                "expected_update_days", 31 if source == "school" else 7 if source == "care_home" else 1
+            )
+        )
+        delay_days = max(0, (date.today() - update_date).days - expected_days) if update_date else None
+        delayed = delay_days is not None and delay_days > 0
+        place_name = str(context.get("place_name") or "").strip()
+        if not place_name:
+            place_name = scope_key if scope_type == "org" else str(context.get("city") or context.get("province") or scope_key)
+
+        return {
+            "generated_at": self.state.get("started_at") or datetime.now().isoformat(timespec="seconds"),
+            "province": context.get("province", ""),
+            "city": context.get("city", ""),
+            "district": context.get("district", ""),
+            "setting_type": setting_type,
+            "place_name": place_name,
+            "location": context.get("location", ""),
+            "warning_type": "风险预警" if scope_type == "province" else "苗头预警",
+            "warning_level_scheme": "模型提示分层，业务颜色阈值待协和核定",
+            "signal_name": signal_name,
+            "verification_status": "待核查",
+            "monitored_target": target,
+            "source_type": "场所相关人群异常" if scope_type == "org" else "社会面疫情",
+            "monitoring_window": f"{min(dates)} 至 {max(dates)}" if len(dates) > 1 else date_value,
+            "key_indicator": f"监测值 {observed:g} 例，模型预期 {expected:g} 例",
+            "verification_hint": "请核对病例明细、统计时段、数据完整性及场所内时空聚集情况。系统信号不代表已确认聚集或暴发。",
+            "data_updated_at": latest,
+            "expected_update_interval_days": expected_days,
+            "data_delay_days": delay_days,
+            "data_status": "延迟" if delayed else "正常",
+        }
 
     def _task_explain(self) -> Dict:
         started = time.monotonic()

@@ -29,6 +29,7 @@ def _iter_dates(start: date, end: date, freq: str):
 
 def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: bool = False) -> List[AggregatePoint]:
     buckets = defaultdict(int)
+    bucket_context = {}
     for ev in events:
         sc = scenarios.get(ev.source, {})
         scope_type = sc.get("scope_type", "province")
@@ -42,19 +43,45 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
         for syn in map_syndromes(ev.diagnosis, ev.symptoms):
             if syn == "other" and not include_other:
                 continue
-            buckets[(ev.source, scope_type, scope_key, scope_label, syn, freq, key_date)] += 1
+            bucket_key = (ev.source, scope_type, scope_key, scope_label, syn, freq, key_date)
+            buckets[bucket_key] += 1
+            context = bucket_context.setdefault(
+                bucket_key,
+                {
+                    "province": ev.province,
+                    "city": ev.city,
+                    "district": ev.district,
+                    "place_name": str(
+                        (ev.fields.get("org_name") if scope_type == "org" else "")
+                        or scope_label
+                        or scope_key
+                    ),
+                    "location": str(ev.fields.get("location") or ev.fields.get("department") or ""),
+                    "setting": str(ev.fields.get("setting") or ""),
+                    "latest_event_date": ev.event_date,
+                },
+            )
+            if ev.event_date > context.get("latest_event_date", ""):
+                context["latest_event_date"] = ev.event_date
 
     series = defaultdict(list)
     for (source, scope_type, scope_key, scope_label, syn, freq, key_date), cnt in buckets.items():
-        series[(source, scope_type, scope_key, scope_label, syn, freq)].append((key_date, cnt))
+        series[(source, scope_type, scope_key, scope_label, syn, freq)].append(
+            (key_date, cnt, bucket_context[(source, scope_type, scope_key, scope_label, syn, freq, key_date)])
+        )
 
     points: List[AggregatePoint] = []
     for (source, scope_type, scope_key, scope_label, syn, freq), pairs in series.items():
         pairs.sort()
         start = min(p[0] for p in pairs)
         end = max(p[0] for p in pairs)
-        count_by_date = dict(pairs)
+        count_by_date = {p[0]: p[1] for p in pairs}
+        context_by_date = {p[0]: p[2] for p in pairs}
+        series_context = dict(pairs[-1][2])
+        series_context["latest_event_date"] = max(p[2].get("latest_event_date", "") for p in pairs)
         for d in _iter_dates(start, end, freq):
+            point_context = dict(context_by_date.get(d, series_context))
+            point_context["latest_event_date"] = series_context["latest_event_date"]
             points.append(
                 AggregatePoint(
                     source=source,
@@ -64,6 +91,7 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
                     date=_display_date(d, freq),
                     count=count_by_date.get(d, 0),
                     scope_label=scope_label,
+                    context=point_context,
                 )
             )
 

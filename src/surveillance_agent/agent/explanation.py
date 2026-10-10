@@ -25,23 +25,27 @@ def _evidence_claims(evidence: RiskEvidence) -> List[Dict[str, Any]]:
 
 def template_explain(evidence: RiskEvidence, level: str = "") -> Dict[str, Any]:
     scores = evidence.scores
-    scope = evidence.scope_label or evidence.scope_key
-    syn_label = evidence.syndrome
+    presentation = evidence.presentation or {}
+    scope = presentation.get("place_name") or evidence.scope_label or evidence.scope_key
+    syn_label = presentation.get("monitored_target") or evidence.syndrome
     level_label = LEVEL_LABELS.get(level, level or "风险")
     text = (
         f"{scope} 的 {syn_label} 症候群在 {evidence.date} 监测值为 {evidence.observed}，"
         f"预期值为 {evidence.expected}。检测器得分：EWMA {scores.get('ewma', 0)}，"
         f"CUSUM {scores.get('cusum', 0)}，Shewhart {scores.get('shewhart', 0)}。"
-        f"综合风险等级为 {level_label}。"
+        f"综合风险等级为 {level_label}；该信号用于提示核查，不代表已确认聚集或暴发。"
     )
     claims = _evidence_claims(evidence)
     return {"signal_id": evidence.signal_id, "text": text, "claims": claims, "draft_source": "template"}
 
 
 def _explanation_prompt(evidence: RiskEvidence) -> str:
+    presentation = evidence.presentation or {}
     example_text = (
-        f"{evidence.scope_label or evidence.scope_key}的{evidence.syndrome}症候群在{evidence.date}的监测值为"
-        f"{evidence.observed}，预期值为{evidence.expected}，建议结合持续监测结果评估风险。"
+        f"{presentation.get('place_name') or evidence.scope_label or evidence.scope_key}在"
+        f"{presentation.get('monitoring_window') or evidence.date}期间，"
+        f"{presentation.get('monitored_target') or evidence.syndrome}监测值为{evidence.observed}例，"
+        f"模型预期为{evidence.expected}例，出现异常升高线索，建议核对病例明细、数据完整性和时空聚集情况。"
     )
     return (
         "你是一个公共卫生风险预警解释器。请严格基于给定证据生成解释，"
@@ -49,6 +53,8 @@ def _explanation_prompt(evidence: RiskEvidence) -> str:
         f"证据: {json.dumps(evidence.to_dict(), ensure_ascii=False)}\n"
         "只输出一个 JSON 对象，不要输出任何其他文字、解释或代码围栏，"
         "不要以'好的''以下是'等开头。只返回 text 字段，保持一句话，"
+        "文字格式参考重点场所信号描述：依次写场所、统计时段、监测对象、关键数据、信号含义和核查方向。"
+        "不得把风险信号表述为确诊结论；如证据标注数据延迟，应说明时效限制。"
         "不要添加证据中不存在的数字。结构化 claims 将由程序从证据生成，无需模型重复输出。输出示例：\n"
         f"{json.dumps({'text': example_text}, ensure_ascii=False)}"
     )

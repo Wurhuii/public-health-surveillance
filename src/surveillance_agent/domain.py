@@ -30,6 +30,7 @@ class AggregatePoint:
     date: str
     count: int
     scope_label: str = ""
+    context: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -49,6 +50,7 @@ class DetectorPoint:
     detector: str
     alarm: bool
     scope_label: str = ""
+    context: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -71,6 +73,7 @@ class RiskEvidence:
     scope_label: str = ""
     quality_limits: List[str] = field(default_factory=list)
     run_dates: List[str] = field(default_factory=list)
+    presentation: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

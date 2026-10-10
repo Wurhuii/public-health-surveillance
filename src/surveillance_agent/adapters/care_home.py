@@ -36,7 +36,7 @@ class CareHomeAdapter(Adapter):
             org_id=hash_id(org_id or org_name, salt),
             province=row.get("省") or "",
             city=row.get("城市") or "",
-            district=row.get("行政区划") or "",
+            district=row.get("区县") or row.get("行政区划") or "",
             event_date=to_iso(event_date),
             diagnosis=diagnosis,
             symptoms=symptoms,
@@ -83,6 +83,7 @@ class HospitalAdapter(Adapter):
             diagnosis=row.get("西医诊断名称") or "",
             symptoms=row.get("现病史") or "",
             fields={
+                "org_name": row.get("医疗机构名称") or row.get("机构名称") or org_code,
                 "onset_date": to_iso(onset_date) if onset_date else "",
                 "department": row.get("科室名称") or "",
                 "gender": row.get("性别") or "",
