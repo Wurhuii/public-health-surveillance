@@ -480,6 +480,7 @@ class MultiAgentCoordinator:
             "hospital": "医疗机构",
             "care_home": "养老机构",
             "school": "学校",
+            "market": "农贸市场",
             "yichang_focus": yichang_setting,
         }.get(source, "重点场所")
         target = {

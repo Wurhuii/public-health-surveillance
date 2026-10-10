@@ -28,6 +28,8 @@ dist/
 *.xlsx
 *.xls
 *.parquet
+!/sample_data/
+!/sample_data/*.csv
 
 # 模型权重
 /model/

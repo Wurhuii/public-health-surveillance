@@ -43,6 +43,20 @@ class TestAdapters(unittest.TestCase):
         # The supplied medical CSV contains an institution code but no name column.
         self.assertEqual(hospital_event.fields["org_name"], "")
 
+    def test_hospital_institution_field_can_supply_display_name(self):
+        row = {
+            "门诊流水号": "SIM-H-001",
+            "医疗机构组织代码": "SIM-HOSP-YC-001",
+            "机构": "宜昌市中心医院（模拟）",
+            "西医诊断名称": "流行性感冒",
+            "就诊日期": "2026/10/9",
+            "病区名称": "呼吸内科一病区",
+        }
+        event = HospitalAdapter().parse(row, "test-salt")
+        self.assertIsNotNone(event)
+        self.assertEqual(event.fields["org_code"], "SIM-HOSP-YC-001")
+        self.assertEqual(event.fields["org_name"], "宜昌市中心医院（模拟）")
+
     def test_syndrome_mapping(self):
         self.assertIn("respiratory", map_syndromes("流行性感冒"))
         self.assertIn("respiratory", map_syndromes("支气管炎"))

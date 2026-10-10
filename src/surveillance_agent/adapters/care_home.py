@@ -66,8 +66,11 @@ class HospitalAdapter(Adapter):
 
     def parse(self, row: Dict[str, str], salt: str) -> Optional[SurveillanceEvent]:
         visit_no = row.get("门诊流水号") or ""
-        org_code = row.get("医疗机构组织代码") or row.get("机构") or ""
-        org_name = row.get("医疗机构名称") or row.get("机构名称") or ""
+        org_field = row.get("机构") or ""
+        org_code = row.get("医疗机构组织代码") or org_field
+        org_name = row.get("医疗机构名称") or row.get("机构名称") or (
+            org_field if org_field and org_field != org_code else ""
+        )
 
         event_date = parse_date(row.get("就诊日期"))
         if event_date is None:

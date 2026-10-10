@@ -50,6 +50,16 @@
 4. 明确的在住起止日期，用于判断就诊时是否属于该机构；
 5. 经专家确认的重点症候群、ICD映射、分母口径和预警阈值。
 
+### 2.2 一周重点场所演示数据
+
+`sample_data/` 内置了 2026-10-03 至 2026-10-09 的纯模拟数据，覆盖三所医院病区、三所养老院、三个学校班级和三个农贸市场。数据特意设置为多种增长形态，用于演示高、中、关注三级风险信号；学校只包含教学日，农贸市场每天固定在 17:00 更新。
+
+```powershell
+python -m surveillance_agent run --config config/simulated_week.json --langgraph --autonomy-stage 3
+```
+
+这组数据用于页面演示和流程测试，不代表真实流行病学阈值或处置标准。
+
 正式部署前必须设置：
 
 ```powershell
@@ -358,6 +368,12 @@ python -m surveillance_agent run --inject --shape gradual --magnitude 10
 
 ```powershell
 python -m surveillance_agent run
+```
+
+直接运行内置的一周重点场所演示数据：
+
+```powershell
+python -m surveillance_agent run --config config/simulated_week.json --langgraph --autonomy-stage 3
 ```
 
 启用 Supervisor LangGraph，默认使用配置中的阶段1：

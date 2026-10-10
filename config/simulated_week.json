@@ -1,0 +1,81 @@
+{
+  "data_dir": "sample_data",
+  "sources": {
+    "care_home": {
+      "file": "simulated_care_home_longitudinal_20261003_20261009.csv",
+      "enabled": true
+    },
+    "hospital": {
+      "file": "simulated_medical_longitudinal_20261003_20261009.csv",
+      "enabled": true
+    },
+    "school": {
+      "file": "simulated_school_longitudinal_20261003_20261009.csv",
+      "enabled": true
+    },
+    "market": {
+      "file": "simulated_market_longitudinal_20261003_20261009.csv",
+      "enabled": true
+    },
+    "yichang_focus": {
+      "file": "20260812 宜昌市样例数据",
+      "enabled": false,
+      "kind": "yichang_focus_bundle",
+      "person_key_fields": ["local_id_hash"]
+    }
+  },
+  "scenarios": {
+    "care_home": {"scope_type": "org", "freq": "day", "expected_update_days": 1},
+    "hospital": {"scope_type": "ward", "freq": "day", "expected_update_days": 1},
+    "school": {
+      "scope_type": "class",
+      "freq": "day",
+      "expected_update_days": 1,
+      "exclude_weekends": true,
+      "included_dates": [],
+      "excluded_dates": [],
+      "excluded_date_ranges": []
+    },
+    "yichang_focus": {"scope_type": "org", "freq": "day", "expected_update_days": 1},
+    "market": {
+      "scope_type": "org",
+      "freq": "day",
+      "expected_update_days": 1,
+      "scheduled_update_time": "17:00"
+    }
+  },
+  "aggregation": {
+    "include_other": false
+  },
+  "supervisor": {
+    "default_autonomy_stage": 1,
+    "max_revision_rounds": 1,
+    "max_step_retries": 1,
+    "max_iterations": 32,
+    "retryable_steps": ["explain", "audit"]
+  },
+  "detection": {
+    "ewma": {"lambda": 0.3, "threshold": 3.0},
+    "cusum": {"k": 0.5, "h": 4.0},
+    "shewhart": {"threshold": 3.0},
+    "watch_ratio": 0.7,
+    "min_history": 4,
+    "merge_alarm_runs": true
+  },
+  "privacy": {
+    "hash_salt_env": "SURVEILLANCE_HASH_SALT",
+    "default_salt": "demo-only-change-me"
+  },
+  "llm": {
+    "mode": "off",
+    "base_url": "http://127.0.0.1:8002/v1",
+    "model": "local-model",
+    "api_key": "",
+    "temperature": 0.0,
+    "max_tokens": 256,
+    "timeout": 120,
+    "retries": 2,
+    "concurrency": 4
+  },
+  "model_version": "1.0.0"
+}
