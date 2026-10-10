@@ -396,6 +396,7 @@ class TestExplanation(unittest.TestCase):
 class TestEndToEnd(unittest.TestCase):
     def test_full_pipeline(self):
         cfg = load_config()
+        cfg["scenarios"]["care_home"]["scope_type"] = "province"
         coord = MultiAgentCoordinator(cfg=cfg, autonomy_stage=1)
         result = coord.run(inject=True, shape="gradual", magnitude=10.0)
         self.assertEqual(result["summary"]["total_events"], 2644)
@@ -441,6 +442,7 @@ class TestEndToEnd(unittest.TestCase):
 
     def test_stage2_end_to_end(self):
         cfg = load_config()
+        cfg["scenarios"]["care_home"]["scope_type"] = "province"
         coord = MultiAgentCoordinator(cfg=cfg, autonomy_stage=2)
         result = coord.run(inject=True, shape="gradual", magnitude=10.0)
         self.assertEqual(result["summary"]["total_events"], 2644)
@@ -512,6 +514,7 @@ class TestImprovements(unittest.TestCase):
 
     def test_audit_fallback_writeback(self):
         cfg = load_config()
+        cfg["scenarios"]["care_home"]["scope_type"] = "province"
         coord = MultiAgentCoordinator(cfg=cfg, autonomy_stage=0)
         coord.run(inject=True, shape="spike", magnitude=10.0)
         self.assertGreater(len(coord.state["risk_signals"]), 0)
@@ -555,6 +558,14 @@ class TestImprovements(unittest.TestCase):
         self.assertIn("城市侧工作台", html)
         self.assertIn("天眼摘要视图", html)
         self.assertIn("setting_id_name", html)
+        self.assertIn("!==\'province\'", html)
+
+    def test_default_focus_place_scopes_are_single_place(self):
+        cfg = load_config()
+        self.assertEqual(cfg["scenarios"]["care_home"]["scope_type"], "org")
+        self.assertEqual(cfg["scenarios"]["hospital"]["scope_type"], "ward")
+        self.assertEqual(cfg["scenarios"]["school"]["scope_type"], "class")
+        self.assertEqual(cfg["scenarios"]["market"]["scope_type"], "org")
 
     def test_institution_catalog_reads_names_and_codes_from_csv(self):
         from surveillance_agent.api.institution_catalog import load_institution_catalog

@@ -25,7 +25,7 @@
     }
   },
   "scenarios": {
-    "care_home": {"scope_type": "province", "freq": "week", "expected_update_days": 7},
+    "care_home": {"scope_type": "org", "freq": "week", "expected_update_days": 7},
     "hospital": {"scope_type": "ward", "freq": "week", "expected_update_days": 1},
     "school": {
       "scope_type": "class",
