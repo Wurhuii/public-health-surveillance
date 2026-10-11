@@ -23,7 +23,7 @@ _OPENAPI_SPEC = {
         "/api/config": {"get": {"summary": "查询配置", "responses": {"200": {"description": "ok"}}}},
         "/api/agents": {"get": {"summary": "查询Agent角色", "responses": {"200": {"description": "ok"}}}},
         "/api/institutions": {"get": {"summary": "查询机构名称与编号", "responses": {"200": {"description": "ok"}}}},
-        "/api/signal-catalog": {"get": {"summary": "查询信号目录21至28", "responses": {"200": {"description": "ok"}}}},
+        "/api/signal-catalog": {"get": {"summary": "查询信号目录21至28及规则状态", "responses": {"200": {"description": "ok"}}}},
         "/api/runs": {
             "get": {"summary": "查询运行记录", "responses": {"200": {"description": "ok"}}},
             "post": {"summary": "启动一次处理", "responses": {"200": {"description": "ok"}}},

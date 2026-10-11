@@ -447,6 +447,25 @@ class MultiAgentCoordinator:
             return None
         observed = next(iter(det_res.values()))["observed"]
         expected = next(iter(det_res.values()))["expected"]
+        try:
+            presentation = self._build_presentation(
+                source=source,
+                scope_type=scope_type,
+                scope_key=scope_key,
+                syndrome=syndrome,
+                date_value=rep_date,
+                dates=dates,
+                observed=observed,
+                expected=expected,
+                model_level=level,
+                detector_results=det_res,
+                model_version=model_version,
+                context=next((v.get("context", {}) for v in det_res.values() if v.get("context")), {}),
+            )
+        except ValueError:
+            # Reference catalog 21-28 has no generic fallback number. Unmatched
+            # monitoring series stay out of the formal signal list.
+            return None
         evidence = RiskEvidence(
             # The episode start remains stable while later runs append new days.
             # This lets the same signal keep its ID and advance update_seq.
@@ -465,20 +484,7 @@ class MultiAgentCoordinator:
             scope_label=next((v.get("scope_label", "") for v in det_res.values() if v.get("scope_label")), ""),
             quality_limits=[],
             run_dates=sorted(dates),
-            presentation=self._build_presentation(
-                source=source,
-                scope_type=scope_type,
-                scope_key=scope_key,
-                syndrome=syndrome,
-                date_value=rep_date,
-                dates=dates,
-                observed=observed,
-                expected=expected,
-                model_level=level,
-                detector_results=det_res,
-                model_version=model_version,
-                context=next((v.get("context", {}) for v in det_res.values() if v.get("context")), {}),
-            ),
+            presentation=presentation,
         )
         return RiskSignal(signal_id=evidence.signal_id, level=level, evidence=evidence)
 
@@ -516,20 +522,13 @@ class MultiAgentCoordinator:
         monitored_targets = list(context.get("monitored_targets") or [])
         if not monitored_targets:
             monitored_targets = ["ARI" if syndrome == "respiratory" else "OTHER"]
-        if setting_type == "学校" and scope_type in {"province", "region"}:
-            signal_code = "28"
-        elif setting_type == "医疗机构":
-            signal_code = "21"
-        elif setting_type == "农贸市场":
-            signal_code = "22"
-        elif setting_type == "养老机构":
-            signal_code = "24"
-        elif setting_type == "学校" and scope_type == "class":
-            signal_code = "26"
-        elif setting_type == "学校":
-            signal_code = "27"
-        else:
-            signal_code = "21"
+        from ..signal_catalog import classify_signal_code
+        signal_code = classify_signal_code(
+            setting_type,
+            scope_type,
+            syndrome,
+            regional_risk=bool(context.get("regional_risk")),
+        )
         catalog = signal_catalog()[signal_code]
         if signal_code == "28":
             setting_type = "区域"
@@ -538,10 +537,15 @@ class MultiAgentCoordinator:
             "24": ["25"], "25": ["24"], "26": ["27", "28"],
             "27": ["26", "28"], "28": ["26", "27"],
         }.get(signal_code, [])
+        denominator = context.get("population_denominator")
+        try:
+            denominator = int(float(denominator)) if denominator not in (None, "") else None
+        except (TypeError, ValueError):
+            denominator = None
         evidence_items = [
             {
                 "name": "监测事件数", "value": round(observed, 4), "unit": "例",
-                "role": "observed", "denominator": None, "comparison_value": None,
+                "role": "observed", "denominator": denominator, "comparison_value": None,
                 "source": catalog["source_details"], "window": f"{min(dates)} 至 {max(dates)}",
             },
             {
@@ -652,6 +656,7 @@ class MultiAgentCoordinator:
             "model_severity": model_level,
             "warning_level_scheme": (
                 "模拟展示映射，不作为正式业务分级" if level_mapping_status == "demo"
+                else "沿用前期暂行分级，待业务确认" if level_mapping_status == "provisional"
                 else "业务等级映射已批准" if level_mapping_status == "approved"
                 else "业务等级映射尚未核定，保持待研判"
             ),
@@ -667,7 +672,10 @@ class MultiAgentCoordinator:
             "window_start": min(dates),
             "window_end": max(dates),
             "window_basis": "自然日连续窗口" if source != "school" else "教学日窗口（休假日剔除）",
-            "key_indicator": f"监测值 {observed:g} 例，模型预期 {expected:g} 例",
+            "key_indicator": (
+                f"监测值 {observed:g} 例 / 监测对象 {denominator:g} 人，模型预期 {expected:g} 例"
+                if denominator else f"监测值 {observed:g} 例，模型预期 {expected:g} 例"
+            ),
             "evidence_items": evidence_items,
             "source_details": catalog["source_details"],
             "rule_id": f"RULE-{signal_code}-ENSEMBLE",

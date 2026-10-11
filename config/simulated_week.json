@@ -79,7 +79,7 @@
     "concurrency": 4
   },
   "signal_output": {
-    "level_mapping_status": "demo",
+    "level_mapping_status": "provisional",
     "level_mapping": {
       "high": "Red",
       "medium": "Orange",

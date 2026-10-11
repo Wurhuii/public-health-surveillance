@@ -469,13 +469,27 @@ class TestEndToEnd(unittest.TestCase):
         self.assertGreaterEqual(len(reviewed["change_log"]), 2)
 
     def test_signal_catalog_and_report_contract(self):
-        from surveillance_agent.signal_catalog import signal_catalog
-        from surveillance_agent.signal_output import REPORT_FIELDS, attach_report_preview
+        from surveillance_agent.signal_catalog import classify_signal_code, signal_catalog
+        from surveillance_agent.signal_output import REPORT_FIELDS, attach_report_preview, business_warning_level
 
         catalog = signal_catalog()
         self.assertEqual(set(catalog), {str(i) for i in range(21, 29)})
         self.assertEqual(catalog["21"]["setting_code"], "HOS")
         self.assertEqual(catalog["28"]["setting_code"], "REG")
+        self.assertEqual(classify_signal_code("医疗机构", "ward"), "21")
+        self.assertEqual(classify_signal_code("农贸市场", "org", "other"), "23")
+        self.assertEqual(classify_signal_code("养老机构", "region", regional_risk=True), "25")
+        self.assertEqual(classify_signal_code("学校", "class"), "26")
+        self.assertEqual(classify_signal_code("学校", "org"), "27")
+        self.assertEqual(classify_signal_code("学校", "region"), "28")
+        with self.assertRaises(ValueError):
+            classify_signal_code("其他", "org")
+        self.assertEqual(
+            business_warning_level("high", {"signal_output": {
+                "level_mapping_status": "provisional", "level_mapping": {"high": "Red"}
+            }}),
+            "Red",
+        )
         row = {
             "signal_id": "s-contract",
             "explanation": "本次监测值高于历史预期。",
@@ -668,7 +682,38 @@ class TestImprovements(unittest.TestCase):
         self.assertIn("城市侧工作台", html)
         self.assertIn("天眼摘要视图", html)
         self.assertIn("setting_id_name", html)
+        self.assertIn("关键证据", html)
+        self.assertIn("目录 ${esc(r.code)} · ${esc(r.warningType)}", html)
         self.assertNotIn("!==\'province\'", html)
+
+    def test_simulated_csvs_include_operational_context(self):
+        import csv
+        from surveillance_agent.config import PROJECT_ROOT
+
+        required = {
+            "simulated_medical_longitudinal_20261003_20261009.csv": {
+                "人员脱敏键", "医疗机构名称", "病区编码", "病区名称", "数据更新时间",
+                "病原检测结果", "在院人数",
+            },
+            "simulated_care_home_longitudinal_20261003_20261009.csv": {
+                "人员脱敏键", "数据更新时间", "在住人数", "事件类型", "病原检测结果",
+            },
+            "simulated_school_longitudinal_20261003_20261009.csv": {
+                "班级编码", "在册人数", "监测人数", "缺勤人数", "数据更新时间", "教学日类型",
+            },
+            "simulated_market_longitudinal_20261003_20261009.csv": {
+                "报告单元类型", "从业人员总数", "数据更新时间", "固定上报时间", "病原检测结果",
+            },
+        }
+        for filename, fields in required.items():
+            with (PROJECT_ROOT / "sample_data" / filename).open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as fh:
+                rows = list(csv.DictReader(fh))
+            self.assertTrue(rows, filename)
+            self.assertTrue(fields.issubset(rows[0]), filename)
+            for field in fields:
+                self.assertTrue(all(str(row.get(field, "")).strip() for row in rows), f"{filename}:{field}")
 
     def test_default_focus_place_scopes_are_single_place(self):
         cfg = load_config()

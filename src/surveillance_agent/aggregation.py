@@ -138,6 +138,7 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
                         "care_resident_linked": bool(ev.fields.get("care_resident_linked", False)),
                         "latest_event_date": ev.event_date,
                         "latest_update_time": str(ev.fields.get("update_time") or ev.event_date),
+                        "population_denominator": ev.fields.get("population_denominator"),
                         "contributing_places": [],
                         "monitored_targets": [],
                     },
@@ -156,6 +157,8 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
                 update_time = str(ev.fields.get("update_time") or ev.event_date)
                 if update_time > context.get("latest_update_time", ""):
                     context["latest_update_time"] = update_time
+                if ev.fields.get("population_denominator") not in (None, ""):
+                    context["population_denominator"] = ev.fields.get("population_denominator")
 
     series = defaultdict(list)
     for (source, scope_type, scope_key, scope_label, syn, freq, key_date), cnt in buckets.items():

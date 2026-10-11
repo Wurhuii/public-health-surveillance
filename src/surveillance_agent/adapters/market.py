@@ -55,6 +55,13 @@ class MarketAdapter(Adapter):
                 "event_count": event_count,
                 "update_time": row.get("数据更新时间") or row.get("上报时间") or "",
                 "location": row.get("摊位区域") or row.get("区域") or "",
+                "population_denominator": row.get("从业人员总数") or row.get("监测人数") or "",
+                "person_key": row.get("从业人员脱敏键") or row.get("从业人员ID") or "",
+                "severe": row.get("重症标记") or "",
+                "pathogen": row.get("病原体名称") or "",
+                "pathogen_result": row.get("病原检测结果") or "",
+                "scheduled_update_time": row.get("固定上报时间") or "",
+                "is_workday": row.get("是否工作日") or "",
             },
         )
 
@@ -64,4 +71,6 @@ class MarketAdapter(Adapter):
             issues.append("missing_market_code")
         if not (row.get("数据更新时间") or row.get("上报时间")):
             issues.append("missing_update_time")
+        if not (row.get("从业人员总数") or row.get("监测人数")):
+            issues.append("missing_market_denominator")
         return issues
