@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from ..config import PROJECT_ROOT, load_config
 from ..storage import Storage
+from ..signal_catalog import catalog_document
 from . import _run_once
 from .institution_catalog import load_institution_catalog
 
@@ -22,6 +23,7 @@ _OPENAPI_SPEC = {
         "/api/config": {"get": {"summary": "查询配置", "responses": {"200": {"description": "ok"}}}},
         "/api/agents": {"get": {"summary": "查询Agent角色", "responses": {"200": {"description": "ok"}}}},
         "/api/institutions": {"get": {"summary": "查询机构名称与编号", "responses": {"200": {"description": "ok"}}}},
+        "/api/signal-catalog": {"get": {"summary": "查询信号目录21至28", "responses": {"200": {"description": "ok"}}}},
         "/api/runs": {
             "get": {"summary": "查询运行记录", "responses": {"200": {"description": "ok"}}},
             "post": {"summary": "启动一次处理", "responses": {"200": {"description": "ok"}}},
@@ -51,6 +53,8 @@ class Handler:
             return _json_response({"agents": list_roles()})
         if method == "GET" and path == "/api/institutions":
             return _json_response({"institutions": load_institution_catalog()})
+        if method == "GET" and path == "/api/signal-catalog":
+            return _json_response(catalog_document())
         if method == "GET" and path == "/api/runs":
             storage = Storage(_db_path())
             try:
@@ -84,6 +88,12 @@ class Handler:
                         action=str(payload.get("action", "")),
                         result=str(payload.get("result", "")),
                         reason=str(payload.get("reason", "")),
+                        reviewer=str(payload.get("reviewer", "")),
+                        task_name=str(payload.get("task_name", "")),
+                        task_owner=str(payload.get("task_owner", "")),
+                        task_due_at=str(payload.get("task_due_at", "")),
+                        observation_period=str(payload.get("observation_period", "")),
+                        task_status=str(payload.get("task_status", "")),
                     )
                     return _json_response(result)
                 except KeyError:

@@ -29,6 +29,7 @@
     "hospital": {"scope_type": "ward", "freq": "day", "expected_update_days": 1},
     "school": {
       "scope_type": "class",
+      "additional_scope_types": ["org", "region"],
       "freq": "day",
       "expected_update_days": 1,
       "exclude_weekends": true,
@@ -76,6 +77,15 @@
     "timeout": 120,
     "retries": 2,
     "concurrency": 4
+  },
+  "signal_output": {
+    "level_mapping_status": "demo",
+    "level_mapping": {
+      "high": "Red",
+      "medium": "Orange",
+      "watch": "Yellow",
+      "normal": "Blue"
+    }
   },
   "model_version": "1.0.0"
 }

@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 from ..config import PROJECT_ROOT, load_config
 from ..storage import Storage
+from ..signal_catalog import catalog_document
 from . import _run_once
 from .institution_catalog import load_institution_catalog
 
@@ -60,6 +61,10 @@ def create_app():
     def institutions():
         return {"institutions": load_institution_catalog()}
 
+    @app.get("/api/signal-catalog")
+    def signal_catalog_endpoint():
+        return catalog_document()
+
     @app.post("/api/runs")
     def start_run(body: Dict[str, Any]):
         use_langgraph = body.get("use_langgraph", False)
@@ -97,6 +102,12 @@ def create_app():
                     action=str(body.get("action", "")),
                     result=str(body.get("result", "")),
                     reason=str(body.get("reason", "")),
+                    reviewer=str(body.get("reviewer", "")),
+                    task_name=str(body.get("task_name", "")),
+                    task_owner=str(body.get("task_owner", "")),
+                    task_due_at=str(body.get("task_due_at", "")),
+                    observation_period=str(body.get("observation_period", "")),
+                    task_status=str(body.get("task_status", "")),
                 )
             except KeyError:
                 return JSONResponse({"error": "signal_not_found"}, status_code=404)

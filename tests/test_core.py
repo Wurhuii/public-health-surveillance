@@ -143,6 +143,26 @@ class TestAdapters(unittest.TestCase):
         )
         self.assertEqual([p.date for p in points], ["2026-10-10"])
 
+    def test_school_can_generate_class_school_and_region_series(self):
+        from surveillance_agent.aggregation import aggregate
+        from surveillance_agent.domain import SurveillanceEvent
+
+        event = SurveillanceEvent(
+            event_id="s-multi", source="school", org_id="school-1", province="湖北省",
+            city="宜昌市", district="西陵区", event_date="2026-10-09",
+            diagnosis="流行性感冒", symptoms="发热咳嗽",
+            fields={"org_name": "示例学校", "org_code": "SCH001",
+                    "class_name": "三年级一班", "area_code": "420502"},
+        )
+        points = aggregate([event], {"school": {
+            "scope_type": "class", "additional_scope_types": ["org", "region"],
+            "freq": "day", "exclude_weekends": True,
+        }})
+        self.assertEqual({p.scope_type for p in points}, {"class", "org", "region"})
+        regional = next(p for p in points if p.scope_type == "region")
+        self.assertEqual(regional.scope_key, "420502")
+        self.assertEqual(regional.context["contributing_place_count"], 1)
+
     def test_market_adapter_supports_daily_aggregate_counts(self):
         from surveillance_agent.aggregation import aggregate
 
@@ -427,9 +447,12 @@ class TestEndToEnd(unittest.TestCase):
         try:
             saved = storage.query_signals(result["run_id"])
             first_id = saved[0]["signal_id"]
-            started = storage.update_signal_review(first_id, "start")
+            started = storage.update_signal_review(first_id, "start", reviewer="测试人员")
             reviewed = storage.update_signal_review(
-                first_id, "save", "异常属实待研判", "测试核查说明"
+                first_id, "save", "异常属实待研判", "测试核查说明",
+                reviewer="测试人员", task_name="补充资料", task_owner="值班人员",
+                task_due_at="2026-10-12T12:00", observation_period="连续观察7日",
+                task_status="进行中",
             )
         finally:
             storage.close()
@@ -441,7 +464,67 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(started["verification_status"], "核查中")
         self.assertEqual(reviewed["verification_status"], "已核查")
         self.assertEqual(reviewed["record_status"], "ACTIVE")
+        self.assertEqual(reviewed["reviewer"], "测试人员")
+        self.assertEqual(reviewed["task_status"], "进行中")
         self.assertGreaterEqual(len(reviewed["change_log"]), 2)
+
+    def test_signal_catalog_and_report_contract(self):
+        from surveillance_agent.signal_catalog import signal_catalog
+        from surveillance_agent.signal_output import REPORT_FIELDS, attach_report_preview
+
+        catalog = signal_catalog()
+        self.assertEqual(set(catalog), {str(i) for i in range(21, 29)})
+        self.assertEqual(catalog["21"]["setting_code"], "HOS")
+        self.assertEqual(catalog["28"]["setting_code"], "REG")
+        row = {
+            "signal_id": "s-contract",
+            "explanation": "本次监测值高于历史预期。",
+            "evidence": {"presentation": {
+                "signal_code": "21", "signal_name": catalog["21"]["name"],
+                "catalog_setting_code": "HOS", "catalog_type_code": "E",
+                "catalog_source_type": "I", "area_code": "420500",
+                "place_code": "H001", "place_name": "示例医院",
+                "warning_level": "Yellow", "monitored_targets": ["ARI"],
+                "monitoring_window": "2026-10-09 00:00:00 至 2026-10-09 23:59:59；自然日",
+                "window_start": "2026-10-09", "window_end": "2026-10-09",
+                "window_basis": "自然日连续窗口", "key_indicator": "监测值 9 例",
+                "verification_hints": ["核对病例明细"], "update_seq": 1,
+                "data_status": "正常", "report_time": "2026-10-10T09:00:00",
+                "evidence_items": [],
+            }},
+        }
+        attach_report_preview(row)
+        self.assertEqual(tuple(row["report_payload"]), REPORT_FIELDS)
+        self.assertTrue(row["report_validation"]["ready"])
+
+    def test_review_requires_named_reviewer_and_start(self):
+        from tempfile import TemporaryDirectory
+        from surveillance_agent.storage import Storage
+
+        with TemporaryDirectory() as temp:
+            storage = Storage(str(__import__("pathlib").Path(temp) / "test.db"))
+            storage.save_signals("run-1", [{
+                "signal_id": "s-review", "level": "watch", "evidence": {
+                    "source": "school", "scope_type": "class", "scope_key": "x",
+                    "syndrome": "respiratory", "date": "2026-10-09",
+                    "observed": 5, "expected": 1, "presentation": {
+                        "generated_at": "2026-10-10T08:00:00"
+                    },
+                },
+            }])
+            with self.assertRaisesRegex(ValueError, "reviewer_required"):
+                storage.update_signal_review("s-review", "start")
+            with self.assertRaisesRegex(ValueError, "start_review_required"):
+                storage.update_signal_review(
+                    "s-review", "save", "异常属实待研判", "说明", reviewer="张三"
+                )
+            storage.update_signal_review("s-review", "start", reviewer="张三")
+            saved = storage.update_signal_review(
+                "s-review", "save", "信息待补充", "等待学校反馈", reviewer="张三"
+            )
+            storage.close()
+        self.assertEqual(saved["verification_status"], "核查中")
+        self.assertEqual(saved["change_log"][-1]["actor"], "张三")
 
     def test_messages_correlated(self):
         from surveillance_agent.utils import read_jsonl
@@ -578,6 +661,8 @@ class TestImprovements(unittest.TestCase):
         self.assertNotIn("fetch('/api/", html)
         self.assertIn("fetch('api/runs'", html)
         self.assertIn("api/signals/${encodeURIComponent(selected.signal_id)}/review", html)
+        self.assertIn("fetch('api/signal-catalog')", html)
+        self.assertIn('id="reviewer"', html)
         self.assertIn("function explanation", html)
         self.assertIn("evidence_items", html)
         self.assertIn("城市侧工作台", html)
@@ -608,6 +693,15 @@ class TestImprovements(unittest.TestCase):
         status, payload = Handler().dispatch("GET", "/api/institutions", b"")
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(payload)["institutions"]["care_home"])
+
+    def test_fallback_server_exposes_signal_catalog(self):
+        import json
+        from surveillance_agent.api.fallback_server import Handler
+
+        status, payload = Handler().dispatch("GET", "/api/signal-catalog", b"")
+        self.assertEqual(status, 200)
+        document = json.loads(payload)
+        self.assertEqual([item["code"] for item in document["signals"]], [str(i) for i in range(21, 29)])
 
     def test_extract_json_from_llm_output(self):
         from surveillance_agent.agent.llm import extract_json

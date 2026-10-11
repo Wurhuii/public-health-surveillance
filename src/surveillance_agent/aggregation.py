@@ -8,6 +8,22 @@ from .adapters.syndromes import map_syndromes
 from .domain import AggregatePoint, SurveillanceEvent
 
 
+def _monitoring_targets(ev: SurveillanceEvent) -> List[str]:
+    text = f"{ev.diagnosis} {ev.symptoms}".lower()
+    targets: List[str] = []
+    for code, words in (
+        ("FLU", ("流感", "influenza")),
+        ("COVID", ("新冠", "covid", "sars-cov-2")),
+        ("RSV", ("呼吸道合胞", "rsv")),
+        ("MP", ("肺炎支原体", "mycoplasma")),
+        ("PNEUMONIA", ("肺炎", "pneumonia")),
+        ("ILI", ("流感样", "ili")),
+    ):
+        if any(word in text for word in words):
+            targets.append(code)
+    return targets or ["ARI"]
+
+
 def _week_start(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
@@ -50,6 +66,10 @@ def _scope(ev: SurveillanceEvent, scope_type: str):
     org_name = str(ev.fields.get("org_name") or "")
     if scope_type == "province":
         return ev.province or "unknown", ev.province or "区域待补充", ""
+    if scope_type == "region":
+        region = " / ".join(part for part in (ev.city, ev.district) if part)
+        area_code = str(ev.fields.get("area_code") or "")
+        return area_code or region or ev.province or "unknown", region or ev.province or "区域待补充", ""
     if scope_type == "ward":
         ward = str(ev.fields.get("ward") or ev.fields.get("department") or "病区待补充")
         return f"{ev.org_id}:{ward}", f"{org_name or '医疗机构名称待补充'} / {ward}", ward
@@ -64,13 +84,13 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
     bucket_context = {}
     for ev in events:
         sc = scenarios.get(ev.source, {})
-        scope_type = sc.get("scope_type", "province")
+        primary_scope = sc.get("scope_type", "province")
         if (
             ev.source == "yichang_focus"
             and ev.fields.get("setting") == "inpatient"
             and ev.fields.get("place_type") != "care_institution"
         ):
-            scope_type = "ward"
+            primary_scope = "ward"
         freq = sc.get("freq", "week")
         d = date.fromisoformat(ev.event_date)
         if ev.source == "school" and (
@@ -79,49 +99,63 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
         ):
             continue
         key_date = _week_start(d) if freq == "week" else d
-        scope_key, scope_label, analysis_unit = _scope(ev, scope_type)
-        for syn in map_syndromes(ev.diagnosis, ev.symptoms):
-            if syn == "other" and not include_other:
-                continue
-            bucket_key = (ev.source, scope_type, scope_key, scope_label, syn, freq, key_date)
-            try:
-                event_count = max(1, int(float(ev.fields.get("event_count", 1))))
-            except (TypeError, ValueError):
-                event_count = 1
-            buckets[bucket_key] += event_count
-            context = bucket_context.setdefault(
-                bucket_key,
-                {
-                    "province": ev.province,
-                    "city": ev.city,
-                    "district": ev.district,
-                    "place_name": str(
-                        (ev.fields.get("org_name") if scope_type != "province" else "")
-                        or scope_label
-                        or scope_key
-                    ),
-                    "location": str(analysis_unit or ev.fields.get("location") or ""),
-                    "analysis_unit": analysis_unit,
-                    "place_code": str(ev.fields.get("org_code") or "") if scope_type != "province" else "",
-                    "place_type": str(ev.fields.get("place_type") or ""),
-                    "setting": str(ev.fields.get("setting") or ""),
-                    "care_resident_linked": bool(ev.fields.get("care_resident_linked", False)),
-                    "latest_event_date": ev.event_date,
-                    "latest_update_time": str(ev.fields.get("update_time") or ev.event_date),
-                    "contributing_places": [],
-                },
-            )
-            place_identity = {
-                "name": str(ev.fields.get("org_name") or ""),
-                "code": str(ev.fields.get("org_code") or ""),
-            }
-            if any(place_identity.values()) and place_identity not in context["contributing_places"]:
-                context["contributing_places"].append(place_identity)
-            if ev.event_date > context.get("latest_event_date", ""):
-                context["latest_event_date"] = ev.event_date
-            update_time = str(ev.fields.get("update_time") or ev.event_date)
-            if update_time > context.get("latest_update_time", ""):
-                context["latest_update_time"] = update_time
+        scope_types = [primary_scope]
+        for extra_scope in sc.get("additional_scope_types", []):
+            if extra_scope not in scope_types:
+                scope_types.append(extra_scope)
+        for scope_type in scope_types:
+            scope_key, scope_label, analysis_unit = _scope(ev, scope_type)
+            for syn in map_syndromes(ev.diagnosis, ev.symptoms):
+                if syn == "other" and not include_other:
+                    continue
+                bucket_key = (ev.source, scope_type, scope_key, scope_label, syn, freq, key_date)
+                try:
+                    event_count = max(1, int(float(ev.fields.get("event_count", 1))))
+                except (TypeError, ValueError):
+                    event_count = 1
+                buckets[bucket_key] += event_count
+                regional = scope_type in {"province", "region"}
+                context = bucket_context.setdefault(
+                    bucket_key,
+                    {
+                        "province": ev.province,
+                        "city": ev.city,
+                        "district": ev.district,
+                        "place_name": str(
+                            (ev.fields.get("org_name") if not regional else "")
+                            or scope_label
+                            or scope_key
+                        ),
+                        "location": str(analysis_unit or ev.fields.get("location") or ""),
+                        "address": str(ev.fields.get("address") or ev.fields.get("location") or ""),
+                        "area_code": str(ev.fields.get("area_code") or ""),
+                        "longitude": str(ev.fields.get("longitude") or ""),
+                        "latitude": str(ev.fields.get("latitude") or ""),
+                        "analysis_unit": analysis_unit,
+                        "place_code": str(ev.fields.get("org_code") or "") if not regional else "",
+                        "place_type": str(ev.fields.get("place_type") or ""),
+                        "setting": str(ev.fields.get("setting") or ""),
+                        "care_resident_linked": bool(ev.fields.get("care_resident_linked", False)),
+                        "latest_event_date": ev.event_date,
+                        "latest_update_time": str(ev.fields.get("update_time") or ev.event_date),
+                        "contributing_places": [],
+                        "monitored_targets": [],
+                    },
+                )
+                for target in _monitoring_targets(ev):
+                    if target not in context["monitored_targets"]:
+                        context["monitored_targets"].append(target)
+                place_identity = {
+                    "name": str(ev.fields.get("org_name") or ""),
+                    "code": str(ev.fields.get("org_code") or ""),
+                }
+                if any(place_identity.values()) and place_identity not in context["contributing_places"]:
+                    context["contributing_places"].append(place_identity)
+                if ev.event_date > context.get("latest_event_date", ""):
+                    context["latest_event_date"] = ev.event_date
+                update_time = str(ev.fields.get("update_time") or ev.event_date)
+                if update_time > context.get("latest_update_time", ""):
+                    context["latest_update_time"] = update_time
 
     series = defaultdict(list)
     for (source, scope_type, scope_key, scope_label, syn, freq, key_date), cnt in buckets.items():
@@ -150,6 +184,11 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
         series_context["contributing_places"] = [
             {"name": name, "code": code} for name, code in sorted_places[:20]
         ]
+        series_context["monitored_targets"] = sorted({
+            target
+            for _, _, item_context in pairs
+            for target in item_context.get("monitored_targets", [])
+        })
         for d in _iter_dates(start, end, freq):
             if source == "school" and _excluded_school_date(d, scenarios.get(source, {})):
                 continue
@@ -161,6 +200,7 @@ def aggregate(events: List[SurveillanceEvent], scenarios: Dict, include_other: b
                 key=lambda item: (item.get("name", ""), item.get("code", "")),
             )
             point_context["contributing_place_count"] = len(point_context.get("contributing_places", []))
+            point_context["monitored_targets"] = series_context["monitored_targets"]
             points.append(
                 AggregatePoint(
                     source=source,

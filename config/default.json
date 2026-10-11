@@ -72,5 +72,14 @@
     "retries": 2,
     "concurrency": 4
   },
+  "signal_output": {
+    "level_mapping_status": "unapproved",
+    "level_mapping": {
+      "high": "Red",
+      "medium": "Orange",
+      "watch": "Yellow",
+      "normal": "Blue"
+    }
+  },
   "model_version": "1.0.0"
 }
