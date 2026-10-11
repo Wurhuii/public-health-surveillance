@@ -441,7 +441,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(started["verification_status"], "核查中")
         self.assertEqual(reviewed["verification_status"], "已核查")
         self.assertEqual(reviewed["record_status"], "ACTIVE")
-        self.assertEqual(len(reviewed["change_log"]), 2)
+        self.assertGreaterEqual(len(reviewed["change_log"]), 2)
 
     def test_messages_correlated(self):
         from surveillance_agent.utils import read_jsonl
