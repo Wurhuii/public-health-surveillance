@@ -145,4 +145,3 @@ if __name__ == "__main__":
     enrich_school()
     enrich_market()
     print("completed simulated CSV fields")
-
