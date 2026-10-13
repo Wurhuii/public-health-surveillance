@@ -10,7 +10,7 @@ from .llm import extract_json, get_llm, get_llm_batch, get_llm_settings
 
 FORBIDDEN_PHRASES = ["已经暴发", "确诊为", "证实暴发", "确定为暴发", "疫情暴发", "已暴发"]
 
-LEVEL_LABELS = {"high": "高", "medium": "中", "watch": "观察", "normal": "正常"}
+LEVEL_LABELS = {"high": "高", "medium": "中", "watch": "关注", "near": "接近阈值", "normal": "正常"}
 
 
 def _evidence_claims(evidence: RiskEvidence) -> List[Dict[str, Any]]:

@@ -25,10 +25,11 @@ def business_warning_level(model_level: str, cfg: Dict[str, Any]) -> str:
     output = cfg.get("signal_output", {})
     if output.get("level_mapping_status") not in {"approved", "demo", "provisional"}:
         return ""
-    mapping = output.get(
-        "level_mapping",
-        {"high": "Red", "medium": "Orange", "watch": "Yellow", "normal": "Blue"},
-    )
+    mapping = {
+        "high": "Red", "medium": "Orange", "watch": "Yellow",
+        "near": "Blue", "normal": "",
+        **output.get("level_mapping", {}),
+    }
     return str(mapping.get(model_level, ""))
 
 

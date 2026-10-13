@@ -15,7 +15,7 @@
 | 2 | `aggregate` 聚合 | 事件按场景/症候群聚合为时间序列，自动补零 | `aggregates.csv` |
 | 3 | `inject` 异常注入 | 实验模式注入 spike/gradual/cluster/multimodal 异常并记录真实标签 | `aggregates_for_detection.csv`, `injection_manifest.json` |
 | 4 | `detect` 统计检测 | EWMA / CUSUM / Shewhart 三检测器，仅用当前点之前的历史做基线 | `detector_points.csv` |
-| 5 | `fuse` 风险评估 | 融合检测器结果生成 high/medium/watch/normal，可合并连续报警段 | `risk_signals.json` |
+| 5 | `fuse` 风险评估 | 融合三个检测器结果生成 high/medium/watch/near/normal，可合并连续报警段 | `risk_signals.json` |
 | 6 | `explain` 解释 | 确定性模板或本地 LLM 生成解释草稿（仅证据内的陈述） | `explanation_drafts.json` |
 | 7 | `audit` 证据审计 | 校验数字一致性、字段存在性、禁用表述；拒绝则退回或标记人审 | `explanations.json` |
 | 8 | `persist` 持久化 | 保存运行摘要、风险信号到 SQLite，写出审计产物 | `summary.json`, `state.json`, SQLite |

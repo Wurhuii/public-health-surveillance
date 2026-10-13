@@ -30,7 +30,7 @@ from .roles import ACTION_TO_ROLE, list_roles
 
 BASE_ORDER = ["ingest", "aggregate", "inject", "detect", "fuse", "explain", "audit", "persist"]
 
-_LEVEL_RANK = {"high": 3, "medium": 2, "watch": 1, "normal": 0}
+_LEVEL_RANK = {"high": 4, "medium": 3, "watch": 2, "near": 1, "normal": 0}
 
 class MultiAgentCoordinator:
     def __init__(

@@ -234,17 +234,36 @@ class TestModels(unittest.TestCase):
             self.assertTrue(alarm, f"{name} should flag anomaly")
 
     def test_fusion_levels(self):
-        det_res = {
-            "ewma": {"score": 5.0, "threshold": 3.0, "alarm": True},
-            "cusum": {"score": 6.0, "threshold": 4.0, "alarm": True},
-            "shewhart": {"score": 4.0, "threshold": 3.0, "alarm": True},
-        }
-        self.assertEqual(fuse_alarms(det_res), "high")
-        det_res["cusum"]["alarm"] = False
-        det_res["cusum"]["score"] = 1.0
-        det_res["shewhart"]["alarm"] = False
-        det_res["shewhart"]["score"] = 1.0
-        self.assertEqual(fuse_alarms(det_res), "medium")
+        from itertools import combinations
+        from surveillance_agent.signal_output import business_warning_level
+
+        names = ("ewma", "cusum", "shewhart")
+        cfg = load_config()
+        for count, expected_level, expected_color in (
+            (3, "high", "Red"),
+            (2, "medium", "Orange"),
+            (1, "watch", "Yellow"),
+        ):
+            for active in combinations(names, count):
+                results = {
+                    name: {"score": 5.0 if name in active else 1.0,
+                           "threshold": 3.0, "alarm": name in active}
+                    for name in names
+                }
+                self.assertEqual(fuse_alarms(results), expected_level)
+                self.assertEqual(business_warning_level(expected_level, cfg), expected_color)
+
+        near = {name: {"score": 1.0, "threshold": 3.0, "alarm": False} for name in names}
+        near["ewma"]["score"] = 2.2
+        self.assertEqual(fuse_alarms(near), "near")
+        self.assertEqual(business_warning_level("near", cfg), "Blue")
+        near["ewma"]["score"] = 2.0
+        self.assertEqual(fuse_alarms(near), "normal")
+        self.assertEqual(business_warning_level("normal", cfg), "")
+
+        # Auxiliary models must not silently change this three-model rule.
+        near["experimental"] = {"score": 99.0, "threshold": 1.0, "alarm": True}
+        self.assertEqual(fuse_alarms(near), "normal")
 
     def test_injection_manifest_auditable(self):
         from surveillance_agent.domain import AggregatePoint

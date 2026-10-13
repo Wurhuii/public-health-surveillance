@@ -78,7 +78,8 @@
       "high": "Red",
       "medium": "Orange",
       "watch": "Yellow",
-      "normal": "Blue"
+      "near": "Blue",
+      "normal": ""
     }
   },
   "model_version": "1.0.0"
