@@ -1,0 +1,87 @@
+学校急性呼吸道症候群监测预警代码运行说明
+==================================================
+
+一、推荐运行方式：点击 Run 或右键运行（不需要 CMD）
+
+1. 使用 PyCharm 或 VS Code 打开代码包文件夹。
+2. 找到“RUN_一键运行全部.py”。
+3. 点击编辑器右上角 Run/运行，或右键文件选择“运行”。
+4. 首次运行时，按照弹窗依次选择：
+   - 学生晨午检、缺勤和就诊原始记录；
+   - 完整班级人口表。
+5. 程序会自动生成 config.json，并依次运行模块 01—16。
+6. 结果默认输出到代码目录下的 OUTPUT_DELIVERY 文件夹。
+
+以后再次点击运行时，会直接使用现有 config.json，不需要重复选择文件。
+如需更换数据，可以直接修改 config.json；也可以删除 config.json，再次运行一键入口重新选择。
+
+
+二、总运行文件中的可调整设置
+
+打开 RUN_一键运行全部.py，在文件开头可修改：
+
+START_AT = 1       从哪个模块开始；1 表示从头运行
+STOP_AFTER = 16    运行至哪个模块；16 表示运行至图形输出
+VERBOSE = True     是否显示详细日志
+DRY_RUN = False    True 时只检查运行顺序，不执行模型
+
+例如，只重新生成监测报告和图形：
+
+START_AT = 15
+STOP_AFTER = 16
+
+
+三、直接运行 run_pipeline.py
+
+如果代码目录已经有 config.json，也可直接对 run_pipeline.py 点击 Run 或右键运行。
+该文件现已默认读取同目录 config.json，不再强制要求填写命令行参数。
+
+
+四、首次运行前的环境要求
+
+Python 环境需要安装 requirements.txt 中的依赖。
+在 PyCharm 中可通过 Python Packages/解释器设置安装；在 VS Code 中选择安装了依赖的 Python 解释器。
+
+如果希望使用命令行安装，兼容命令仍为：
+
+python -m pip install -r requirements.txt
+
+
+五、命令行兼容方式（可选，不是推荐方式）
+
+完整流水线：
+
+python run_pipeline.py
+
+指定配置：
+
+python run_pipeline.py --config config.json --verbose
+
+只生成报告和图形：
+
+python run_pipeline.py --start-at 15 --stop-after 16
+
+仅检查模块顺序，不运行模型：
+
+python run_pipeline.py --dry-run
+
+
+六、主要图形输出
+
+OUTPUT_DELIVERY\16_FIGURES\16_01_realtime_trend.png
+OUTPUT_DELIVERY\16_FIGURES\16_02_observed_expected.png
+OUTPUT_DELIVERY\16_FIGURES\16_03_detector_timeline.png
+OUTPUT_DELIVERY\16_FIGURES\16_04_school_signal_heatmap.png
+OUTPUT_DELIVERY\16_FIGURES\16_05_event_lifecycle.png
+OUTPUT_DELIVERY\16_FIGURES\16_06_warning_summary.png
+OUTPUT_DELIVERY\16_FIGURES\16_07_threshold_tradeoff.png
+OUTPUT_DELIVERY\16_figure_manifest.csv
+OUTPUT_DELIVERY\16_figure_index.md
+
+
+七、重要说明
+
+1. 当前验证结果为研究原型；若结果中 prototype_only=1，不得解释为正式生产阈值。
+2. 候选事件和颜色等级用于核查优先级，不等同于确诊暴发、病原判断或传播链确认。
+3. 某一模块运行失败时，总运行文件会立即停止，不会继续使用不完整的上游结果。
+4. 正式上线前必须补充长期历史数据、独立校准期、锁定参考事件库和事件级评价。

@@ -30,6 +30,11 @@ dist/
 *.parquet
 !/sample_data/
 !/sample_data/*.csv
+!/data_governance/
+!/data_governance/**/
+/data_governance/sample_data/
+/data_governance/output/*
+!/data_governance/output/.gitkeep
 
 # 模型权重
 /model/

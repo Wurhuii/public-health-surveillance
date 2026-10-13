@@ -14,9 +14,13 @@ INJECTION_MAGNITUDE="${INJECTION_MAGNITUDE:-10}"
 START_LLM="${START_LLM:-1}"
 START_WEB="${START_WEB:-1}"
 RUN_PIPELINE="${RUN_PIPELINE:-1}"
+RUN_GOVERNANCE="${RUN_GOVERNANCE:-1}"
+GOVERNANCE_FAST="${GOVERNANCE_FAST:-0}"
+CONFIG_PATH="${CONFIG_PATH:-config/governed_samples.json}"
 
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"
+export SURVEILLANCE_CONFIG="$CONFIG_PATH"
 
 command -v python >/dev/null 2>&1 || {
   echo "[start_all] 错误：当前环境找不到 python"
@@ -79,27 +83,41 @@ echo "  LLM端口:       ${LLM_PORT}"
 echo "  Web端口:       ${WEB_PORT}"
 echo "  自治阶段:      ${AUTONOMY_STAGE}"
 echo "  注入类型/强度: ${INJECTION_SHAPE} / ${INJECTION_MAGNITUDE}"
+echo "  数据治理:      ${RUN_GOVERNANCE}（快速模式 ${GOVERNANCE_FAST}）"
+echo "  监测配置:      ${CONFIG_PATH}"
 echo "============================================================"
 
+if [ "$RUN_GOVERNANCE" = "1" ]; then
+  echo "[start_all] 1/4 运行场所数据治理包并生成标准输入"
+  if [ "$GOVERNANCE_FAST" = "1" ]; then
+    python scripts/run_data_governance.py --fast 2>&1 | tee var/governance_latest.log
+  else
+    python scripts/run_data_governance.py 2>&1 | tee var/governance_latest.log
+  fi
+else
+  echo "[start_all] 1/4 跳过数据治理（RUN_GOVERNANCE=${RUN_GOVERNANCE}）"
+fi
+
 if [ "$START_LLM" = "1" ]; then
-  echo "[start_all] 1/3 启动并检查 LLM 服务"
+  echo "[start_all] 2/4 启动并检查 LLM 服务"
   bash scripts/start_llm.sh "$LLM_PORT"
 else
-  echo "[start_all] 1/3 跳过 LLM 启动（START_LLM=${START_LLM}）"
+  echo "[start_all] 2/4 跳过 LLM 启动（START_LLM=${START_LLM}）"
 fi
 
 if [ "$START_WEB" = "1" ]; then
-  echo "[start_all] 2/3 启动并检查 Web/API 服务"
+  echo "[start_all] 3/4 启动并检查 Web/API 服务"
   start_web
   echo "[start_all] 请在 VS Code 的“端口/Ports”面板转发 ${WEB_PORT}，然后打开生成的地址"
 else
-  echo "[start_all] 2/3 跳过 Web/API 启动（START_WEB=${START_WEB}）"
+  echo "[start_all] 3/4 跳过 Web/API 启动（START_WEB=${START_WEB}）"
 fi
 
 if [ "$RUN_PIPELINE" = "1" ]; then
-  echo "[start_all] 3/3 执行完整监测流程"
-  echo "[start_all] python -m surveillance_agent run --inject --shape ${INJECTION_SHAPE} --magnitude ${INJECTION_MAGNITUDE} --langgraph --autonomy-stage ${AUTONOMY_STAGE}"
+  echo "[start_all] 4/4 执行完整监测流程"
+  echo "[start_all] python -m surveillance_agent run --config ${CONFIG_PATH} --inject --shape ${INJECTION_SHAPE} --magnitude ${INJECTION_MAGNITUDE} --langgraph --autonomy-stage ${AUTONOMY_STAGE}"
   python -m surveillance_agent run \
+    --config "$CONFIG_PATH" \
     --inject \
     --shape "$INJECTION_SHAPE" \
     --magnitude "$INJECTION_MAGNITUDE" \
@@ -107,7 +125,7 @@ if [ "$RUN_PIPELINE" = "1" ]; then
     --autonomy-stage "$AUTONOMY_STAGE" \
     2>&1 | tee var/pipeline_latest.log
 else
-  echo "[start_all] 3/3 跳过监测流程（RUN_PIPELINE=${RUN_PIPELINE}）"
+  echo "[start_all] 4/4 跳过监测流程（RUN_PIPELINE=${RUN_PIPELINE}）"
 fi
 
 echo "============================================================"

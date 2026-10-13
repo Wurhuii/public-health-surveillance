@@ -15,22 +15,25 @@
 
 当前版本是验证流程和研究设计的原型，不是可以直接用于疾病诊断或公共卫生处置的生产系统。统计阈值尚未经过真实数据标定。
 
-## 2. 已使用的模拟数据
+## 2. 已使用的数据治理包与示例数据
 
-默认配置读取项目上级目录的三份文件：
+默认配置先运行仓库中的 `data_governance/`，再读取治理后的标准输入：
 
-- `care_home_data_hubei_yichang-模拟.csv`：省份 A 养老院场景；
-- `medical_data_hubei_yichang-模拟.csv`：省份 A 医院场景；
-- `school_symptom_processed.xlsx`：省份 B 学校场景。
+- `data_governance/school/`：学校 00—16 模块完整代码包；
+- `data_governance/care_home/legacy/`：养老机构 1—17 步原始研究脚本；
+- `data_governance/published_samples/`：由代码包示例生成、可公开部署的去标识验证数据；
+- `data_governance/output/school_governed.csv`：学校治理结果；
+- `data_governance/output/care_home_governed.csv`：养老机构治理结果。
 
-一次完整导入会生成：
+运行入口：
 
-- 养老院标准事件 1,000 条；
-- 医院标准事件 1,644 条；
-- 学校标准事件 2,099 条；
-- 合计标准事件 4,743 条。
+```bash
+python scripts/run_data_governance.py
+```
 
-原始文件不会被修改。身份证号、门诊流水号、老人信息 ID、学校记录 ID 等不会原样进入统一事件；事件 ID 使用本地盐值进行不可逆哈希。模拟数据存在重复流水号、缺少省份字段和症状日期晚于上报日期等问题，系统会在 `quality.json` 中记录。
+原始代码包工作簿不提交到公开 GitHub。服务器需要用原始示例重新生成时，将其放在 `/data/home/6120260064/wrh/surveillance_data/governance_inputs/`，然后设置 `GOVERNANCE_INPUT_ROOT`。未提供原始工作簿时，上述命令自动使用仓库内置的去标识验证数据，主系统仍可直接运行。
+
+养老机构示例的日期和跨来源人员键经过掩码，演示入口会确定性模拟这两个字段，并在输出和 `governance_manifest.json` 中明确标记。该结果只用于流程联调，不能解释为真实业务数据或模型验证结果。医院和农贸市场尚无独立成熟治理包，默认不导入；旧宜昌目录数据源也默认关闭。详细目录和服务器放置方式见 `data_governance/README.md`。
 
 ### 2.1 宜昌市重点场所样例数据
 
@@ -315,11 +318,12 @@ bash scripts/start_all.sh
 
 脚本会依次完成：
 
-1. 调用 `scripts/start_llm.sh`，加载CANN/ATB环境并启动LLM服务；
-2. 后台启动 `0.0.0.0:8080` 的风险展示页面和API；
-3. 执行 `python -m surveillance_agent run --inject --shape gradual --magnitude 10 --langgraph --autonomy-stage 3`；
-4. 把网页、LLM和流水线日志写入 `var/`；
-5. 打印VS Code端口转发、状态检查和停止命令。
+1. 运行 `scripts/run_data_governance.py`，用代码包示例数据生成标准输入；
+2. 调用 `scripts/start_llm.sh`，加载CANN/ATB环境并启动LLM服务；
+3. 后台启动 `0.0.0.0:8080` 的风险展示页面和API；
+4. 使用 `config/governed_samples.json` 执行 LangGraph 三级自治监测流程；
+5. 把治理、网页、LLM和流水线日志写入 `var/`；
+6. 打印VS Code端口转发、状态检查和停止命令。
 
 查看状态或停止后台服务：
 
@@ -342,6 +346,12 @@ WEB_PORT=8081 bash scripts/start_all.sh
 
 # 只启动LLM和网页，不立即执行流水线
 RUN_PIPELINE=0 bash scripts/start_all.sh
+
+# 已生成治理结果时跳过治理包
+RUN_GOVERNANCE=0 bash scripts/start_all.sh
+
+# 快速联调：学校代码包只运行到模块05
+GOVERNANCE_FAST=1 bash scripts/start_all.sh
 
 # 已有LLM服务，只启动网页并执行流水线
 START_LLM=0 bash scripts/start_all.sh
