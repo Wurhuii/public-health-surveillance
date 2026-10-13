@@ -15,7 +15,7 @@
 | 2 | `aggregate` 聚合 | 事件按场景/症候群聚合为时间序列，自动补零 | `aggregates.csv` |
 | 3 | `inject` 异常注入 | 实验模式注入 spike/gradual/cluster/multimodal 异常并记录真实标签 | `aggregates_for_detection.csv`, `injection_manifest.json` |
 | 4 | `detect` 统计检测 | EWMA / CUSUM / Shewhart 三检测器，仅用当前点之前的历史做基线 | `detector_points.csv` |
-| 5 | `fuse` 风险评估 | 融合检测器结果生成 high/medium/watch/normal，可合并连续报警段 | `risk_signals.json` |
+| 5 | `fuse` 风险评估 | 融合三个检测器结果生成 high/medium/watch/near/normal，可合并连续报警段 | `risk_signals.json` |
 | 6 | `explain` 解释 | 确定性模板或本地 LLM 生成解释草稿（仅证据内的陈述） | `explanation_drafts.json` |
 | 7 | `audit` 证据审计 | 校验数字一致性、字段存在性、禁用表述；拒绝则退回或标记人审 | `explanations.json` |
 | 8 | `persist` 持久化 | 保存运行摘要、风险信号到 SQLite，写出审计产物 | `summary.json`, `state.json`, SQLite |
@@ -275,7 +275,7 @@ python scripts/llm_server.py [选项]     # 本地 LLM 推理服务
 
 ## 6. HTTP API 与本地页面
 
-启动 `serve` 后浏览器访问 `http://127.0.0.1:8080`。页面支持：查看风险信号表、点击"证据"展开检测器分数/阈值/模型版本/质量限制、一键触发运行（注入或不注入）。
+启动 `serve` 后浏览器访问 `http://127.0.0.1:8080`。页面默认只展示最近一次已完成运行的信号并显示批次编号；支持查看风险信号表、点击"证据"展开检测器分数/阈值/模型版本/质量限制、一键触发运行（注入或不注入）。
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
@@ -285,7 +285,7 @@ python scripts/llm_server.py [选项]     # 本地 LLM 推理服务
 | GET | `/api/agents` | 查询 Agent 角色与能力 |
 | POST | `/api/runs` | 启动一次处理 |
 | GET | `/api/runs` | 查询运行记录 |
-| GET | `/api/risks` | 查询结构化风险结果 |
+| GET | `/api/risks` | 查询结构化风险结果；支持 `latest_only=true` 与 `run_id` |
 | GET | `/docs` `/openapi.json` | 接口文档（FastAPI 模式；回退服务器提供精简版） |
 
 `POST /api/runs` 请求体示例：
@@ -445,7 +445,7 @@ $env:SURVEILLANCE_LLM_API_KEY = ""
   - §6.2 "展开为一个或多个症候群" 与实际"互斥单映射"不符；
   - §6.5 风险信号按"时间窗口"粒度的描述与 `merge_alarm_runs` 合并段语义不符。
 - **死代码**：`agent/supervisor.py` 的 `ACTION_WHITELIST / PREQUISITES / missing_preconditions` 定义了但从未被编排器或 LangGraph 引用；`agent/messages.py` 的 `AgentMessage` 协议字段与审计追溯能力未完全发挥。
-- **`state.json` 的 `node_times` 恒为空**：README 声称记录"各步骤时间"，实际 `_write_state` 未填充。
+- **阶段计时已补齐**：`state.json` 和 `summary.json` 的 `node_times` 记录各阶段调用次数、累计耗时和最近一次耗时，CLI 同步展示。
 
 ### B. 统计方法问题（影响实验结果可信度）
 
@@ -464,7 +464,7 @@ $env:SURVEILLANCE_LLM_API_KEY = ""
 - **`pyproject.toml` 打包不完整**：`packages` 缺少 `surveillance_agent.research`，且 `static/` 与 `config/` 未声明为包数据 → 按 README §8.3 离线 `pip install -e .` 后，`experiment rq*` 会失败、`serve` 页面 404（平台 demo 用 `PYTHONPATH=src` 直接跑，暂未受影响）。
 - **`run_id` 秒级粒度**（`orchestrator.py`）：同一秒内并发运行会撞 ID，SQLite `INSERT OR REPLACE` 互相覆盖；API `POST /api/runs` 无并发保护。
 - **API 无鉴权/限流/输入校验**：`shape`、`magnitude`、`autonomy_stage` 接受任意值，`POST /api/runs` 同步阻塞线程。
-- **LLM 服务与调用为串行**：`scripts/llm_server.py` 单进程 uvicorn、客户端逐个信号调用 → 风险信号多时耗时线性增长（平台实测注入场景约 47 条信号需数分钟量级）；未做批量/并发。
+- **LLM 支持并发与批量推理**：vLLM/MindIE 通过并发请求进行连续批处理；项目自带的 Transformers 服务提供 `/v1/chat/completions/batch`，默认每批 4 条，减少逐条生成带来的线性等待。
 - **LLM 输出依赖模型能力**：提示词要求"只输出 JSON"，`extract_json` 已容错，但 1.5B 模型偶发输出不合规仍会回退模板；RQ4 的 `grounded_llm`/`ungrounded_llm` 目前仍只是状态占位，未真正执行 LLM 对照实验。
 - **LLM 运行依赖平台环境**：`llm_server.py` 需要平台已装 transformers/torch/torch_npu；本机（Windows 开发环境）未装则无法本地跑通模型服务。
 - **无日志框架**：全用 `print`/`write_json`，缺少统一结构化日志。

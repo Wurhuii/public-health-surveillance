@@ -5,7 +5,10 @@ from typing import Any, Dict
 
 from ..config import PROJECT_ROOT, load_config
 from ..storage import Storage
+from ..signal_catalog import catalog_document
 from . import _run_once
+from .institution_catalog import load_institution_catalog
+from .school_governance import school_governance_summary
 
 
 def _db_path() -> str:
@@ -55,6 +58,18 @@ def create_app():
         from ..agent import list_roles
         return {"agents": list_roles()}
 
+    @app.get("/api/institutions")
+    def institutions():
+        return {"institutions": load_institution_catalog()}
+
+    @app.get("/api/signal-catalog")
+    def signal_catalog_endpoint():
+        return catalog_document()
+
+    @app.get("/api/school-governance")
+    def school_governance_endpoint():
+        return school_governance_summary()
+
     @app.post("/api/runs")
     def start_run(body: Dict[str, Any]):
         use_langgraph = body.get("use_langgraph", False)
@@ -75,10 +90,40 @@ def create_app():
             storage.close()
 
     @app.get("/api/risks")
-    def risks():
+    def risks(latest_only: bool = False, run_id: str = ""):
         storage = Storage(_db_path())
         try:
-            return {"risks": storage.query_signals()}
+            selected_run_id = run_id.strip()
+            if latest_only and not selected_run_id:
+                selected_run_id = storage.latest_run_id()
+            rows = storage.query_signals(selected_run_id) if selected_run_id else (
+                [] if latest_only else storage.query_signals()
+            )
+            return {"risks": rows, "run_id": selected_run_id}
+        finally:
+            storage.close()
+
+    @app.post("/api/signals/{signal_id}/review")
+    def review_signal(signal_id: str, body: Dict[str, Any]):
+        storage = Storage(_db_path())
+        try:
+            try:
+                return storage.update_signal_review(
+                    signal_id=signal_id,
+                    action=str(body.get("action", "")),
+                    result=str(body.get("result", "")),
+                    reason=str(body.get("reason", "")),
+                    reviewer=str(body.get("reviewer", "")),
+                    task_name=str(body.get("task_name", "")),
+                    task_owner=str(body.get("task_owner", "")),
+                    task_due_at=str(body.get("task_due_at", "")),
+                    observation_period=str(body.get("observation_period", "")),
+                    task_status=str(body.get("task_status", "")),
+                )
+            except KeyError:
+                return JSONResponse({"error": "signal_not_found"}, status_code=404)
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=422)
         finally:
             storage.close()
 

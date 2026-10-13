@@ -4,11 +4,13 @@ from typing import List, Optional, Type
 
 from .base import Adapter, read_rows
 from .care_home import CareHomeAdapter, HospitalAdapter, SchoolAdapter
+from .market import MarketAdapter
 
 ADAPTERS: List[Type[Adapter]] = [
     HospitalAdapter,
     CareHomeAdapter,
     SchoolAdapter,
+    MarketAdapter,
 ]
 
 

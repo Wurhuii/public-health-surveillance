@@ -1,0 +1,16 @@
+{
+  "paths": {
+    "data_root": "E:/path/to/school_monitoring_data",
+    "raw_records": "DATA/school_data.xlsx",
+    "class_population": "DATA/class_population_base.xlsx",
+    "school_calendar": "",
+    "output_dir": "OUTPUT_DELIVERY",
+    "reference_events": ""
+  },
+  "baseline": {
+    "training_end": "",
+    "min_history_teaching_days": 60,
+    "min_total_primary_cases": 100
+  }
+}
+

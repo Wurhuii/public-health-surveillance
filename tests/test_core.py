@@ -4,6 +4,7 @@ import unittest
 
 from surveillance_agent.adapters import detect_adapter_from_file
 from surveillance_agent.adapters.care_home import CareHomeAdapter, HospitalAdapter
+from surveillance_agent.adapters.market import MarketAdapter
 from surveillance_agent.adapters.syndromes import map_syndromes
 from surveillance_agent.agent import MultiAgentCoordinator
 from surveillance_agent.agent.explanation import template_explain, validate_draft
@@ -24,6 +25,37 @@ class TestAdapters(unittest.TestCase):
         cfg = load_config()
         path = resolve_source_file(cfg, "care_home")
         self.assertIs(detect_adapter_from_file(str(path)), CareHomeAdapter)
+
+    def test_csv_institution_names_and_codes_are_preserved(self):
+        from surveillance_agent.adapters.base import read_rows
+        from surveillance_agent.utils import get_salt
+
+        cfg = load_config()
+        salt = get_salt(cfg["privacy"]["default_salt"])
+        care_row = next(read_rows(str(resolve_source_file(cfg, "care_home"))))
+        hospital_row = next(read_rows(str(resolve_source_file(cfg, "hospital"))))
+        care_event = CareHomeAdapter().parse(care_row, salt)
+        hospital_event = HospitalAdapter().parse(hospital_row, salt)
+
+        self.assertEqual(care_event.fields["org_name"], care_row["机构名称"])
+        self.assertEqual(care_event.fields["org_code"], care_row["机构编码"])
+        self.assertEqual(hospital_event.fields["org_code"], hospital_row["医疗机构组织代码"])
+        # The supplied medical CSV contains an institution code but no name column.
+        self.assertEqual(hospital_event.fields["org_name"], "")
+
+    def test_hospital_institution_field_can_supply_display_name(self):
+        row = {
+            "门诊流水号": "SIM-H-001",
+            "医疗机构组织代码": "SIM-HOSP-YC-001",
+            "机构": "宜昌市中心医院（模拟）",
+            "西医诊断名称": "流行性感冒",
+            "就诊日期": "2026/10/9",
+            "病区名称": "呼吸内科一病区",
+        }
+        event = HospitalAdapter().parse(row, "test-salt")
+        self.assertIsNotNone(event)
+        self.assertEqual(event.fields["org_code"], "SIM-HOSP-YC-001")
+        self.assertEqual(event.fields["org_name"], "宜昌市中心医院（模拟）")
 
     def test_syndrome_mapping(self):
         self.assertIn("respiratory", map_syndromes("流行性感冒"))
@@ -54,6 +86,113 @@ class TestAdapters(unittest.TestCase):
         self.assertTrue(all(p.syndrome != "other" for p in points))
         points2 = aggregate(events, scenarios, include_other=True)
         self.assertTrue(any(p.syndrome == "other" for p in points2))
+
+    def test_regional_aggregate_keeps_csv_institution_catalog(self):
+        from surveillance_agent.aggregation import aggregate
+        from surveillance_agent.domain import SurveillanceEvent
+
+        events = [
+            SurveillanceEvent(
+                event_id=f"c{i}", source="care_home", org_id=f"o{i}", province="湖北省",
+                city="宜昌市", district="", event_date="2026-10-09",
+                diagnosis="流行性感冒", symptoms="咳嗽",
+                fields={"org_name": name, "org_code": code, "place_type": "care_home"},
+            )
+            for i, (name, code) in enumerate((("甲养老院", "F001"), ("乙养老院", "F002")))
+        ]
+        point = aggregate(events, {"care_home": {"scope_type": "province", "freq": "day"}})[0]
+        self.assertEqual(point.context["contributing_place_count"], 2)
+        self.assertEqual(
+            point.context["contributing_places"],
+            [{"name": "乙养老院", "code": "F002"}, {"name": "甲养老院", "code": "F001"}],
+        )
+
+    def test_school_comparison_skips_weekends_and_groups_by_class(self):
+        from surveillance_agent.aggregation import aggregate
+        from surveillance_agent.domain import SurveillanceEvent
+
+        events = [
+            SurveillanceEvent(
+                event_id=f"s{i}", source="school", org_id="school-1", province="湖北省",
+                city="宜昌市", district="西陵区", event_date=day,
+                diagnosis="咳嗽", symptoms="发热", fields={"org_name": "示例学校", "class_name": "三年级一班"},
+            )
+            for i, day in enumerate(("2026-10-09", "2026-10-10", "2026-10-12"))
+        ]
+        points = aggregate(
+            events,
+            {"school": {"scope_type": "class", "freq": "day", "exclude_weekends": True}},
+        )
+        self.assertEqual([p.date for p in points], ["2026-10-09", "2026-10-12"])
+        self.assertTrue(all(p.scope_type == "class" for p in points))
+        self.assertTrue(all("三年级一班" in p.scope_label for p in points))
+
+    def test_school_makeup_day_overrides_weekend_exclusion(self):
+        from surveillance_agent.aggregation import aggregate
+        from surveillance_agent.domain import SurveillanceEvent
+
+        event = SurveillanceEvent(
+            event_id="s1", source="school", org_id="school-1", province="湖北省",
+            city="宜昌市", district="西陵区", event_date="2026-10-10",
+            diagnosis="咳嗽", symptoms="发热", fields={"org_name": "示例学校", "class_name": "三年级一班"},
+        )
+        points = aggregate(
+            [event],
+            {"school": {"scope_type": "class", "freq": "day", "exclude_weekends": True,
+                        "included_dates": ["2026-10-10"]}},
+        )
+        self.assertEqual([p.date for p in points], ["2026-10-10"])
+
+    def test_school_can_generate_class_school_and_region_series(self):
+        from surveillance_agent.aggregation import aggregate
+        from surveillance_agent.domain import SurveillanceEvent
+
+        event = SurveillanceEvent(
+            event_id="s-multi", source="school", org_id="school-1", province="湖北省",
+            city="宜昌市", district="西陵区", event_date="2026-10-09",
+            diagnosis="流行性感冒", symptoms="发热咳嗽",
+            fields={"org_name": "示例学校", "org_code": "SCH001",
+                    "class_name": "三年级一班", "area_code": "420502"},
+        )
+        points = aggregate([event], {"school": {
+            "scope_type": "class", "additional_scope_types": ["org", "region"],
+            "freq": "day", "exclude_weekends": True,
+        }})
+        self.assertEqual({p.scope_type for p in points}, {"class", "org", "region"})
+        regional = next(p for p in points if p.scope_type == "region")
+        self.assertEqual(regional.scope_key, "420502")
+        self.assertEqual(regional.context["contributing_place_count"], 1)
+
+    def test_market_adapter_supports_daily_aggregate_counts(self):
+        from surveillance_agent.aggregation import aggregate
+
+        row = {
+            "市场编码": "M001", "市场名称": "示例农贸市场", "统计日期": "2026-10-09",
+            "症状": "咳嗽", "病例数": "6", "数据更新时间": "2026-10-09 17:00", "_index": "0",
+        }
+        self.assertTrue(MarketAdapter.recognizes(list(row)))
+        event = MarketAdapter().parse(row, "test-salt")
+        self.assertIsNotNone(event)
+        points = aggregate([event], {"market": {"scope_type": "org", "freq": "day"}})
+        self.assertEqual(points[0].count, 6)
+        self.assertEqual(points[0].context["place_code"], "M001")
+        self.assertEqual(points[0].context["latest_update_time"], "2026-10-09 17:00")
+
+    def test_hospital_comparison_is_separated_by_ward(self):
+        from surveillance_agent.aggregation import aggregate
+        from surveillance_agent.domain import SurveillanceEvent
+
+        events = [
+            SurveillanceEvent(
+                event_id=f"h{i}", source="hospital", org_id="hospital-1", province="湖北省",
+                city="宜昌市", district="西陵区", event_date="2026-10-09",
+                diagnosis="流行性感冒", symptoms="咳嗽", fields={"org_name": "示例医院", "ward": ward},
+            )
+            for i, ward in enumerate(("呼吸一区", "呼吸二区"))
+        ]
+        points = aggregate(events, {"hospital": {"scope_type": "ward", "freq": "day"}})
+        self.assertEqual(len({p.scope_key for p in points}), 2)
+        self.assertTrue(all(p.context["analysis_unit"].startswith("呼吸") for p in points))
 
     def test_events_generated_and_unique(self):
         cfg = load_config()
@@ -95,17 +234,36 @@ class TestModels(unittest.TestCase):
             self.assertTrue(alarm, f"{name} should flag anomaly")
 
     def test_fusion_levels(self):
-        det_res = {
-            "ewma": {"score": 5.0, "threshold": 3.0, "alarm": True},
-            "cusum": {"score": 6.0, "threshold": 4.0, "alarm": True},
-            "shewhart": {"score": 4.0, "threshold": 3.0, "alarm": True},
-        }
-        self.assertEqual(fuse_alarms(det_res), "high")
-        det_res["cusum"]["alarm"] = False
-        det_res["cusum"]["score"] = 1.0
-        det_res["shewhart"]["alarm"] = False
-        det_res["shewhart"]["score"] = 1.0
-        self.assertEqual(fuse_alarms(det_res), "medium")
+        from itertools import combinations
+        from surveillance_agent.signal_output import business_warning_level
+
+        names = ("ewma", "cusum", "shewhart")
+        cfg = load_config()
+        for count, expected_level, expected_color in (
+            (3, "high", "Red"),
+            (2, "medium", "Orange"),
+            (1, "watch", "Yellow"),
+        ):
+            for active in combinations(names, count):
+                results = {
+                    name: {"score": 5.0 if name in active else 1.0,
+                           "threshold": 3.0, "alarm": name in active}
+                    for name in names
+                }
+                self.assertEqual(fuse_alarms(results), expected_level)
+                self.assertEqual(business_warning_level(expected_level, cfg), expected_color)
+
+        near = {name: {"score": 1.0, "threshold": 3.0, "alarm": False} for name in names}
+        near["ewma"]["score"] = 2.2
+        self.assertEqual(fuse_alarms(near), "near")
+        self.assertEqual(business_warning_level("near", cfg), "Blue")
+        near["ewma"]["score"] = 2.0
+        self.assertEqual(fuse_alarms(near), "normal")
+        self.assertEqual(business_warning_level("normal", cfg), "")
+
+        # Auxiliary models must not silently change this three-model rule.
+        near["experimental"] = {"score": 99.0, "threshold": 1.0, "alarm": True}
+        self.assertEqual(fuse_alarms(near), "normal")
 
     def test_injection_manifest_auditable(self):
         from surveillance_agent.domain import AggregatePoint
@@ -126,6 +284,23 @@ class TestModels(unittest.TestCase):
             self.assertIn("original", inj)
             self.assertIn("injected", inj)
             self.assertGreater(inj["injected"], inj["original"])
+
+
+class TestStorage(unittest.TestCase):
+    def test_latest_run_id_uses_completed_run_even_when_it_has_no_signals(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from surveillance_agent.storage import Storage
+
+        with TemporaryDirectory() as temp_dir:
+            storage = Storage(str(Path(temp_dir) / "test.db"))
+            try:
+                storage.save_run("run-old", "2026-10-13T08:00:00", "2026-10-13T08:01:00", "end", 1, False, {})
+                storage.save_run("run-new", "2026-10-13T09:00:00", "2026-10-13T09:01:00", "end", 1, False, {})
+                self.assertEqual(storage.latest_run_id(), "run-new")
+                self.assertEqual(storage.query_signals(storage.latest_run_id()), [])
+            finally:
+                storage.close()
 
 
 class TestExplanation(unittest.TestCase):
@@ -176,6 +351,94 @@ class TestExplanation(unittest.TestCase):
         self.assertIn("latency_ms", draft)
         self.assertGreaterEqual(draft["latency_ms"], 0)
 
+    def test_llm_explain_rebuilds_claims_from_evidence(self):
+        import surveillance_agent.agent.explanation as explanation_mod
+
+        def fake_llm(prompt):
+            return '{"text": "监测数据出现变化，建议继续观察。", "claims": []}'
+
+        original = explanation_mod.get_llm
+        explanation_mod.get_llm = lambda: fake_llm
+        try:
+            draft = explanation_mod.llm_explain(self._evidence())
+        finally:
+            explanation_mod.get_llm = original
+        self.assertEqual(draft["draft_source"], "llm")
+        self.assertEqual([c["field"] for c in draft["claims"]], ["observed", "expected", "syndrome", "date"])
+        ok, errors = validate_draft(draft, self._evidence())
+        self.assertTrue(ok, errors)
+
+    def test_llm_explain_many_uses_configured_concurrency(self):
+        import threading
+        import surveillance_agent.agent.explanation as explanation_mod
+
+        barrier = threading.Barrier(2)
+
+        def fake_llm(prompt):
+            barrier.wait(timeout=2)
+            return '{"text": "监测数据出现变化，建议继续观察。"}'
+
+        original_llm = explanation_mod.get_llm
+        original_settings = explanation_mod.get_llm_settings
+        explanation_mod.get_llm = lambda: fake_llm
+        explanation_mod.get_llm_settings = lambda: {"concurrency": 2}
+        try:
+            drafts = explanation_mod.llm_explain_many(
+                [(self._evidence(), "high"), (self._evidence(), "watch")]
+            )
+        finally:
+            explanation_mod.get_llm = original_llm
+            explanation_mod.get_llm_settings = original_settings
+        self.assertEqual(len(drafts), 2)
+        self.assertTrue(all(draft["draft_source"] == "llm" for draft in drafts))
+
+    def test_llm_explain_many_uses_transformers_batch_endpoint(self):
+        import surveillance_agent.agent.explanation as explanation_mod
+
+        calls = []
+
+        def fake_batch(prompts):
+            calls.append(len(prompts))
+            return ['{"text": "批量解释。"}' for _ in prompts]
+
+        original_llm = explanation_mod.get_llm
+        original_batch = explanation_mod.get_llm_batch
+        original_settings = explanation_mod.get_llm_settings
+        explanation_mod.get_llm = lambda: (lambda prompt: '{"text": "单条解释。"}')
+        explanation_mod.get_llm_batch = lambda: fake_batch
+        explanation_mod.get_llm_settings = lambda: {"backend": "transformers", "concurrency": 2}
+        try:
+            drafts = explanation_mod.llm_explain_many(
+                [(self._evidence(), "high") for _ in range(5)]
+            )
+        finally:
+            explanation_mod.get_llm = original_llm
+            explanation_mod.get_llm_batch = original_batch
+            explanation_mod.get_llm_settings = original_settings
+        self.assertEqual(calls, [2, 2, 1])
+        self.assertEqual(len(drafts), 5)
+        self.assertTrue(all(draft["draft_source"] == "llm" for draft in drafts))
+
+    def test_llm_prompt_contains_real_values_not_placeholders(self):
+        import surveillance_agent.agent.explanation as explanation_mod
+
+        captured = {}
+
+        def fake_llm(prompt):
+            captured["prompt"] = prompt
+            return '{"text": "监测值高于预期，建议继续观察。"}'
+
+        original = explanation_mod.get_llm
+        explanation_mod.get_llm = lambda: fake_llm
+        try:
+            draft = explanation_mod.llm_explain(self._evidence())
+        finally:
+            explanation_mod.get_llm = original
+        self.assertEqual(draft["draft_source"], "llm")
+        self.assertIn('"observed": 12.0', captured["prompt"])
+        self.assertIn("只返回 text 字段", captured["prompt"])
+        self.assertNotIn('"claims":', captured["prompt"].split("输出示例：", 1)[-1])
+
     def test_forged_number_rejected(self):
         ev = self._evidence()
         draft = template_explain(ev)
@@ -203,11 +466,115 @@ class TestExplanation(unittest.TestCase):
 class TestEndToEnd(unittest.TestCase):
     def test_full_pipeline(self):
         cfg = load_config()
+        cfg["scenarios"]["care_home"]["scope_type"] = "province"
         coord = MultiAgentCoordinator(cfg=cfg, autonomy_stage=1)
         result = coord.run(inject=True, shape="gradual", magnitude=10.0)
         self.assertEqual(result["summary"]["total_events"], 2644)
         self.assertGreater(result["summary"]["risk_signals"], 0)
         self.assertTrue(result["summary"]["use_langgraph"] is False)
+        self.assertIn("explain", result["summary"]["node_times"])
+        self.assertGreaterEqual(result["summary"]["node_times"]["explain"]["total_seconds"], 0)
+        self.assertTrue(all(signal.explanation for signal in result["risk_signals"]))
+        self.assertTrue(all(signal.explanation_source for signal in result["risk_signals"]))
+
+        from surveillance_agent.storage import Storage
+
+        storage = Storage(str(coord.run_dir.parent.parent / "surveillance.db"))
+        try:
+            saved = storage.query_signals(result["run_id"])
+            first_id = saved[0]["signal_id"]
+            started = storage.update_signal_review(first_id, "start", reviewer="测试人员")
+            reviewed = storage.update_signal_review(
+                first_id, "save", "异常属实待研判", "测试核查说明",
+                reviewer="测试人员", task_name="补充资料", task_owner="值班人员",
+                task_due_at="2026-10-12T12:00", observation_period="连续观察7日",
+                task_status="进行中",
+            )
+        finally:
+            storage.close()
+        self.assertEqual(len(saved), len(result["risk_signals"]))
+        self.assertTrue(all(row["explanation"] for row in saved))
+        self.assertTrue(all(row["explanation_source"] for row in saved))
+        self.assertTrue(all(row["evidence"]["presentation"].get("signal_code") for row in saved))
+        self.assertTrue(all(row["evidence"]["presentation"].get("evidence_items") for row in saved))
+        self.assertEqual(started["verification_status"], "核查中")
+        self.assertEqual(reviewed["verification_status"], "已核查")
+        self.assertEqual(reviewed["record_status"], "ACTIVE")
+        self.assertEqual(reviewed["reviewer"], "测试人员")
+        self.assertEqual(reviewed["task_status"], "进行中")
+        self.assertGreaterEqual(len(reviewed["change_log"]), 2)
+
+    def test_signal_catalog_and_report_contract(self):
+        from surveillance_agent.signal_catalog import classify_signal_code, signal_catalog
+        from surveillance_agent.signal_output import REPORT_FIELDS, attach_report_preview, business_warning_level
+
+        catalog = signal_catalog()
+        self.assertEqual(set(catalog), {str(i) for i in range(21, 29)})
+        self.assertEqual(catalog["21"]["setting_code"], "HOS")
+        self.assertEqual(catalog["28"]["setting_code"], "REG")
+        self.assertEqual(classify_signal_code("医疗机构", "ward"), "21")
+        self.assertEqual(classify_signal_code("农贸市场", "org", "other"), "23")
+        self.assertEqual(classify_signal_code("养老机构", "region", regional_risk=True), "25")
+        self.assertEqual(classify_signal_code("学校", "class"), "26")
+        self.assertEqual(classify_signal_code("学校", "org"), "27")
+        self.assertEqual(classify_signal_code("学校", "region"), "28")
+        with self.assertRaises(ValueError):
+            classify_signal_code("其他", "org")
+        self.assertEqual(
+            business_warning_level("high", {"signal_output": {
+                "level_mapping_status": "provisional", "level_mapping": {"high": "Red"}
+            }}),
+            "Red",
+        )
+        row = {
+            "signal_id": "s-contract",
+            "explanation": "本次监测值高于历史预期。",
+            "evidence": {"presentation": {
+                "signal_code": "21", "signal_name": catalog["21"]["name"],
+                "catalog_setting_code": "HOS", "catalog_type_code": "E",
+                "catalog_source_type": "I", "area_code": "420500",
+                "place_code": "H001", "place_name": "示例医院",
+                "warning_level": "Yellow", "monitored_targets": ["ARI"],
+                "monitoring_window": "2026-10-09 00:00:00 至 2026-10-09 23:59:59；自然日",
+                "window_start": "2026-10-09", "window_end": "2026-10-09",
+                "window_basis": "自然日连续窗口", "key_indicator": "监测值 9 例",
+                "verification_hints": ["核对病例明细"], "update_seq": 1,
+                "data_status": "正常", "report_time": "2026-10-10T09:00:00",
+                "evidence_items": [],
+            }},
+        }
+        attach_report_preview(row)
+        self.assertEqual(tuple(row["report_payload"]), REPORT_FIELDS)
+        self.assertTrue(row["report_validation"]["ready"])
+
+    def test_review_requires_named_reviewer_and_start(self):
+        from tempfile import TemporaryDirectory
+        from surveillance_agent.storage import Storage
+
+        with TemporaryDirectory() as temp:
+            storage = Storage(str(__import__("pathlib").Path(temp) / "test.db"))
+            storage.save_signals("run-1", [{
+                "signal_id": "s-review", "level": "watch", "evidence": {
+                    "source": "school", "scope_type": "class", "scope_key": "x",
+                    "syndrome": "respiratory", "date": "2026-10-09",
+                    "observed": 5, "expected": 1, "presentation": {
+                        "generated_at": "2026-10-10T08:00:00"
+                    },
+                },
+            }])
+            with self.assertRaisesRegex(ValueError, "reviewer_required"):
+                storage.update_signal_review("s-review", "start")
+            with self.assertRaisesRegex(ValueError, "start_review_required"):
+                storage.update_signal_review(
+                    "s-review", "save", "异常属实待研判", "说明", reviewer="张三"
+                )
+            storage.update_signal_review("s-review", "start", reviewer="张三")
+            saved = storage.update_signal_review(
+                "s-review", "save", "信息待补充", "等待学校反馈", reviewer="张三"
+            )
+            storage.close()
+        self.assertEqual(saved["verification_status"], "核查中")
+        self.assertEqual(saved["change_log"][-1]["actor"], "张三")
 
     def test_messages_correlated(self):
         from surveillance_agent.utils import read_jsonl
@@ -233,6 +600,7 @@ class TestEndToEnd(unittest.TestCase):
 
     def test_stage2_end_to_end(self):
         cfg = load_config()
+        cfg["scenarios"]["care_home"]["scope_type"] = "province"
         coord = MultiAgentCoordinator(cfg=cfg, autonomy_stage=2)
         result = coord.run(inject=True, shape="gradual", magnitude=10.0)
         self.assertEqual(result["summary"]["total_events"], 2644)
@@ -241,6 +609,12 @@ class TestEndToEnd(unittest.TestCase):
 
 
 class TestImprovements(unittest.TestCase):
+    def test_cli_formats_total_elapsed_time(self):
+        from surveillance_agent.cli import _format_elapsed
+
+        self.assertEqual(_format_elapsed(0), "00:00:00.0 (0.0 秒)")
+        self.assertEqual(_format_elapsed(3661.25), "01:01:01.2 (3661.2 秒)")
+
     def test_cusum_resets_after_alarm(self):
         from surveillance_agent.models.detectors import CUSUM
 
@@ -280,8 +654,25 @@ class TestImprovements(unittest.TestCase):
         self.assertEqual(len(sigs), 1)
         self.assertEqual(sigs[0].evidence.run_dates, ["2026-W01", "2026-W02", "2026-W03"])
 
+    def test_warning_output_is_limited_to_respiratory_signals(self):
+        from surveillance_agent.domain import DetectorPoint
+
+        coord = MultiAgentCoordinator(cfg=load_config(), autonomy_stage=0)
+        coord.state["detector_points"] = [
+            DetectorPoint(
+                source="school", scope_type="class", scope_key=f"class-{syndrome}",
+                syndrome=syndrome, date="2026-10-09", observed=12.0, expected=2.0,
+                score=5.0, threshold=3.0, detector="shewhart", alarm=True,
+                scope_label="示例学校 / 三年级一班",
+            )
+            for syndrome in ("respiratory", "digestive")
+        ]
+        coord._task_fuse()
+        self.assertEqual([s.evidence.syndrome for s in coord.state["risk_signals"]], ["respiratory"])
+
     def test_audit_fallback_writeback(self):
         cfg = load_config()
+        cfg["scenarios"]["care_home"]["scope_type"] = "province"
         coord = MultiAgentCoordinator(cfg=cfg, autonomy_stage=0)
         coord.run(inject=True, shape="spike", magnitude=10.0)
         self.assertGreater(len(coord.state["risk_signals"]), 0)
@@ -293,6 +684,7 @@ class TestImprovements(unittest.TestCase):
         self.assertEqual(result["rejected"], [])
         for sig in coord.state["risk_signals"]:
             self.assertTrue(sig.explanation, "fallback explanation should be written back")
+            self.assertEqual(sig.explanation_source, "template_fallback")
 
     def test_adaptive_model_selection(self):
         from surveillance_agent.agent.model_policy import select_models
@@ -310,6 +702,88 @@ class TestImprovements(unittest.TestCase):
         res2 = handler.dispatch("GET", "/static/index.html", b"")
         self.assertEqual(res2[0], 200)
 
+    def test_frontend_api_urls_work_behind_path_proxy(self):
+        from surveillance_agent.config import PROJECT_ROOT
+
+        html = (PROJECT_ROOT / "src" / "surveillance_agent" / "static" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("fetch('/api/", html)
+        self.assertIn("fetch('api/runs'", html)
+        self.assertIn("api/signals/${encodeURIComponent(selected.signal_id)}/review", html)
+        self.assertIn("fetch('api/signal-catalog')", html)
+        self.assertIn('id="reviewer"', html)
+        self.assertIn("function explanation", html)
+        self.assertIn("evidence_items", html)
+        self.assertIn("城市侧工作台", html)
+        self.assertIn("天眼摘要视图", html)
+        self.assertIn("setting_id_name", html)
+        self.assertIn("关键证据", html)
+        self.assertIn("目录 ${esc(r.code)} · ${esc(r.warningType)}", html)
+        self.assertNotIn("!==\'province\'", html)
+
+    def test_simulated_csvs_include_operational_context(self):
+        import csv
+        from surveillance_agent.config import PROJECT_ROOT
+
+        required = {
+            "simulated_medical_longitudinal_20261003_20261009.csv": {
+                "人员脱敏键", "医疗机构名称", "病区编码", "病区名称", "数据更新时间",
+                "病原检测结果", "在院人数",
+            },
+            "simulated_care_home_longitudinal_20261003_20261009.csv": {
+                "人员脱敏键", "数据更新时间", "在住人数", "事件类型", "病原检测结果",
+            },
+            "simulated_school_longitudinal_20261003_20261009.csv": {
+                "班级编码", "在册人数", "监测人数", "缺勤人数", "数据更新时间", "教学日类型",
+            },
+            "simulated_market_longitudinal_20261003_20261009.csv": {
+                "报告单元类型", "从业人员总数", "数据更新时间", "固定上报时间", "病原检测结果",
+            },
+        }
+        for filename, fields in required.items():
+            with (PROJECT_ROOT / "sample_data" / filename).open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as fh:
+                rows = list(csv.DictReader(fh))
+            self.assertTrue(rows, filename)
+            self.assertTrue(fields.issubset(rows[0]), filename)
+            for field in fields:
+                self.assertTrue(all(str(row.get(field, "")).strip() for row in rows), f"{filename}:{field}")
+
+    def test_default_focus_place_scopes_are_single_place(self):
+        cfg = load_config()
+        self.assertEqual(cfg["scenarios"]["care_home"]["scope_type"], "org")
+        self.assertEqual(cfg["scenarios"]["hospital"]["scope_type"], "ward")
+        self.assertEqual(cfg["scenarios"]["school"]["scope_type"], "class")
+        self.assertEqual(cfg["scenarios"]["market"]["scope_type"], "org")
+
+    def test_institution_catalog_reads_names_and_codes_from_csv(self):
+        from surveillance_agent.api.institution_catalog import load_institution_catalog
+
+        catalog = load_institution_catalog()
+        self.assertTrue(catalog["care_home"])
+        self.assertTrue(all(item["name"] and item["code"] for item in catalog["care_home"]))
+        self.assertTrue(catalog["hospital"])
+        self.assertTrue(all(item["code"] for item in catalog["hospital"]))
+
+    def test_fallback_server_exposes_institution_catalog(self):
+        import json
+        from surveillance_agent.api.fallback_server import Handler
+
+        status, payload = Handler().dispatch("GET", "/api/institutions", b"")
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(payload)["institutions"]["care_home"])
+
+    def test_fallback_server_exposes_signal_catalog(self):
+        import json
+        from surveillance_agent.api.fallback_server import Handler
+
+        status, payload = Handler().dispatch("GET", "/api/signal-catalog", b"")
+        self.assertEqual(status, 200)
+        document = json.loads(payload)
+        self.assertEqual([item["code"] for item in document["signals"]], [str(i) for i in range(21, 29)])
+
     def test_extract_json_from_llm_output(self):
         from surveillance_agent.agent.llm import extract_json
 
@@ -325,6 +799,10 @@ class TestImprovements(unittest.TestCase):
         self.assertEqual(extract_json("{'a': 1, 'b': 'x'}"), {"a": 1, "b": "x"})
         self.assertEqual(extract_json('{"a": 1, "b": [1, 2,],}'), {"a": 1, "b": [1, 2]})
         self.assertEqual(extract_json('好的，这是结果：{"a": None, "b": True}'), {"a": None, "b": True})
+        self.assertEqual(
+            extract_json('{"text": "解释", "claims": [{"field": "observed", "value": 5.0"}]}'),
+            {"text": "解释", "claims": [{"field": "observed", "value": 5.0}]},
+        )
 
 
 if __name__ == "__main__":

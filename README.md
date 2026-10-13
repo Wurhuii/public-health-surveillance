@@ -2,9 +2,9 @@
 
 ## 1. 项目定位
 
-本项目是一个可运行的省级公共卫生风险监测多 Agent 原型。Supervisor Agent 通过结构化消息组织数据治理、聚合、统计检测、风险评估、解释、证据审计和持久化 Agent，用三份模拟数据验证以下完整链路：
+本项目是一个可运行的省级公共卫生风险监测多 Agent 原型。Supervisor Agent 通过结构化消息组织数据治理、聚合、统计检测、风险评估、解释、证据审计和持久化 Agent，验证以下完整链路：
 
-1. 接收养老院、医院和学校三类异构数据；
+1. 接收养老院、医院、学校和农贸市场等异构数据；
 2. 将不同字段体系转换为统一的监测事件；
 3. 在省内完成数据质量检查、症候群映射和时间序列聚合；
 4. 调用 EWMA、CUSUM、Shewhart 三种统计检测器；
@@ -15,22 +15,53 @@
 
 当前版本是验证流程和研究设计的原型，不是可以直接用于疾病诊断或公共卫生处置的生产系统。统计阈值尚未经过真实数据标定。
 
-## 2. 已使用的模拟数据
+## 2. 已使用的数据治理包与示例数据
 
-默认配置读取项目上级目录的三份文件：
+默认配置先运行仓库中的 `data_governance/`，再读取治理后的标准输入：
 
-- `care_home_data_hubei_yichang-模拟.csv`：省份 A 养老院场景；
-- `medical_data_hubei_yichang-模拟.csv`：省份 A 医院场景；
-- `school_symptom_processed.xlsx`：省份 B 学校场景。
+- `data_governance/school/`：学校 00—16 模块完整代码包；
+- `data_governance/care_home/legacy/`：养老机构 1—17 步原始研究脚本；
+- `data_governance/published_samples/`：由代码包示例生成、可公开部署的去标识验证数据；
+- `data_governance/output/school_governed.csv`：学校治理结果；
+- `data_governance/output/care_home_governed.csv`：养老机构治理结果。
 
-一次完整导入会生成：
+运行入口：
 
-- 养老院标准事件 1,000 条；
-- 医院标准事件 1,644 条；
-- 学校标准事件 2,099 条；
-- 合计标准事件 4,743 条。
+```bash
+python scripts/run_data_governance.py
+```
 
-原始文件不会被修改。身份证号、门诊流水号、老人信息 ID、学校记录 ID 等不会原样进入统一事件；事件 ID 使用本地盐值进行不可逆哈希。模拟数据存在重复流水号、缺少省份字段和症状日期晚于上报日期等问题，系统会在 `quality.json` 中记录。
+原始代码包工作簿不提交到公开 GitHub。服务器需要用原始示例重新生成时，将其放在 `/data/home/6120260064/wrh/surveillance_data/governance_inputs/`，然后设置 `GOVERNANCE_INPUT_ROOT`。未提供原始工作簿时，上述命令自动使用仓库内置的去标识验证数据，主系统仍可直接运行。
+
+养老机构示例的日期和跨来源人员键经过掩码，演示入口会确定性模拟这两个字段，并在输出和 `governance_manifest.json` 中明确标记。该结果只用于流程联调，不能解释为真实业务数据或模型验证结果。医院和农贸市场尚无独立成熟治理包，默认不导入；旧宜昌目录数据源也默认关闭。详细目录和服务器放置方式见 `data_governance/README.md`。
+
+### 2.1 宜昌市重点场所样例数据
+
+默认配置还会检查项目上级目录中的 `20260812 宜昌市样例数据/`，读取门诊、住院、检验、医养结合老人底册和网格地址八张表。该数据包按“重点场所风险预警”处理：
+
+- 医疗记录仅在诊断日期有效时生成医疗机构级症候群事件；
+- 养老机构级归属必须通过双方一致的、已脱敏人员键精确连接；
+- 不使用姓名、出生日期、行号或模糊匹配猜测人员归属；
+- 老人底册用于机构清单和在住人数统计，不能单独作为疾病事件；
+- 所有缺失文件、无效日期、连接覆盖率和未就绪原因写入 `quality.json`。
+
+当前提供的样例中，诊疗日期为类似 `20200000000000`、`20300000000000` 的掩码值，老人底册也没有与诊疗表共享的 `local_id_hash`。因此系统会识别机构底册，但会把该数据源标记为 `not_ready_for_alerting`，不会用不可靠关联生成告警。协和补充以下字段后，无需改变主流程：
+
+1. 老人底册与诊疗表一致的不可逆脱敏人员键 `local_id_hash`；
+2. 可排序到日的真实或一致平移后的诊断/就诊日期；
+3. 机构稳定编码、机构名称、机构类型和行政区划；
+4. 明确的在住起止日期，用于判断就诊时是否属于该机构；
+5. 经专家确认的重点症候群、ICD映射、分母口径和预警阈值。
+
+### 2.2 一周重点场所演示数据
+
+`sample_data/` 内置了 2026-10-03 至 2026-10-09 的纯模拟数据，覆盖三所医院病区、三所养老院、三个学校班级和三个农贸市场。数据特意设置为多种增长形态，用于演示高、中、关注三级风险信号；学校只包含教学日，农贸市场每天固定在 17:00 更新。
+
+```powershell
+python -m surveillance_agent run --config config/simulated_week.json --langgraph --autonomy-stage 3
+```
+
+这组数据用于页面演示和流程测试，不代表真实流行病学阈值或处置标准。
 
 正式部署前必须设置：
 
@@ -167,10 +198,15 @@ code/
 ### 6.2 aggregate
 
 - 将一个事件展开为一个或多个症候群事件；
-- 养老院、医院默认按省份和周聚合；
-- 学校默认按机构和天聚合；
+- 养老院按单个机构和周聚合，医院按单个机构的病区和周聚合；重点场所页面不展示省级多机构汇总信号；
+- 学校按班级和天聚合，周末、寒暑假与节假日可排除，调休补课日可显式纳入；
+- 农贸市场支持逐条事件或含 `病例数`/`人数` 的每日汇总行，并保留固定上报时间；
 - 自动补齐没有事件的时间点；
 - 输出 `aggregates.csv`。
+
+学校日历在 `config/default.json` 的 `scenarios.school` 中维护：`excluded_dates` 填单个休假日，`excluded_date_ranges` 填寒暑假区间，`included_dates` 填周末补课日。正式运行应以当地教育局年度校历和学校临时停课、复课记录为准。
+
+农贸市场数据源默认关闭。准备好 `market_daily_report.csv` 后，将 `sources.market.enabled` 改为 `true`。至少提供市场名称或编码、统计日期，以及症状/诊断或病例数；推荐同时提供行政区划、固定上报时间和摊位区域。默认约定每日 17:00 更新，逾期情况会作为数据新鲜度信息展示。
 
 ### 6.3 inject
 
@@ -272,6 +308,63 @@ langgraph==0.3.34
 
 ## 8. 运行方法
 
+### 8.0 Linux/昇腾服务器一键启动
+
+在项目根目录执行：
+
+```bash
+bash scripts/start_all.sh
+```
+
+脚本会依次完成：
+
+1. 运行 `scripts/run_data_governance.py`，用代码包示例数据生成标准输入；
+2. 调用 `scripts/start_llm.sh`，加载CANN/ATB环境并启动LLM服务；
+3. 后台启动 `0.0.0.0:8080` 的风险展示页面和API；
+4. 使用 `config/governed_samples.json` 执行 LangGraph 三级自治监测流程；
+5. 把治理、网页、LLM和流水线日志写入 `var/`；
+6. 打印VS Code端口转发、状态检查和停止命令。
+
+完成学校治理后，网页顶栏的“学校治理成果”会读取
+`data_governance/output/school_model/`。快速模式展示模块01—05的数据质量、
+症候事件、趋势和班级/年级/学校聚合；完整模式还展示模块06—16的动态基线、
+集中性探测、顺序检测、候选事件、进展风险与动态分级状态。页面仅返回聚合结果，
+不返回学生身份字段或逐条原始记录。首次读取Excel成果约需数秒，随后按文件时间缓存。
+
+查看状态或停止后台服务：
+
+```bash
+bash scripts/status_all.sh
+bash scripts/stop_all.sh
+```
+
+常用自定义方式：
+
+```bash
+# 明确使用Transformers后端
+LLM_BACKEND=transformers bash scripts/start_all.sh
+
+# 使用vLLM Ascend和8路并发
+LLM_BACKEND=vllm LLM_CONCURRENCY=8 bash scripts/start_all.sh
+
+# 修改网页端口
+WEB_PORT=8081 bash scripts/start_all.sh
+
+# 只启动LLM和网页，不立即执行流水线
+RUN_PIPELINE=0 bash scripts/start_all.sh
+
+# 已生成治理结果时跳过治理包
+RUN_GOVERNANCE=0 bash scripts/start_all.sh
+
+# 快速联调：学校代码包只运行到模块05
+GOVERNANCE_FAST=1 bash scripts/start_all.sh
+
+# 已有LLM服务，只启动网页并执行流水线
+START_LLM=0 bash scripts/start_all.sh
+```
+
+在服务器的VS Code中打开“端口/Ports”面板，转发脚本输出的Web端口（默认8080），再点击生成的转发地址。服务器上的 `127.0.0.1` 只代表服务器自身，不能直接在个人电脑浏览器中使用。
+
 ### 8.1 当前目录直接运行
 
 在 `code` 目录执行：
@@ -291,6 +384,12 @@ python -m surveillance_agent run --inject --shape gradual --magnitude 10
 
 ```powershell
 python -m surveillance_agent run
+```
+
+直接运行内置的一周重点场所演示数据：
+
+```powershell
+python -m surveillance_agent run --config config/simulated_week.json --langgraph --autonomy-stage 3
 ```
 
 启用 Supervisor LangGraph，默认使用配置中的阶段1：
@@ -319,6 +418,12 @@ http://127.0.0.1:8080
 
 如果 FastAPI/Uvicorn 已安装，自动使用 FastAPI；否则使用已经内置并验证过的标准库回退服务器。
 
+页面按“列表—详情”两层展示，并且默认只展示最近一次已完成运行的信号；页面同时标明当前批次 `run_id`，零信号批次显示空结果，不回退到历史批次。列表严格保留信号产生时间、行政区域、场所名称、预警类型、预警等级、信号名称和核查状态七项；详情页提供结构化证据、规则版本与状态、数据缺失或延迟、关联信号、核查任务及完整更新记录。“天眼摘要视图”生成统一 12 字段预览，并逐项显示上报阻塞原因。当前系统只生成预览，不会自动向外部系统提交。
+
+信号目录 21—28 的定义保存在 `config/signal_catalog.json`。分类代码按场所、分析层级和信号性质匹配目录；无法可靠归类的数据会阻止生成正式目录信号，不占用虚构编号。当前沿用暂行三模型分级：三个模型报警为 `high→Red`，两个为 `medium→Orange`，一个为 `watch→Yellow`；均未报警但至少一个模型达到自身阈值的 `watch_ratio` 时为 `near→Blue`。均未报警且未接近阈值的记录为 `normal`，不生成预警信号。页面会明确标注“待业务确认”。学校演示数据同时形成班级、学校和区域三层序列，对应目录 26、27、28。目录 23 和 25 只有在相应诊断监测或区域监测数据接入后才会生成，不用其他指标替代。
+
+四份一周模拟 CSV 已补齐展示和核查所需的上下文字段，包括医院病区与在院人数、养老机构在住人数与脱敏键、学校班级编码与监测分母、农贸市场固定上报时间与从业人员分母。需要重新生成这些补充字段时运行 `python scripts/enrich_simulated_csv.py`；脚本只处理模拟数据，不应直接用于真实业务数据清洗。
+
 ### 8.3 正式离线环境安装
 
 在有网络的同版本 Python 3.9.20 环境提前下载 wheel：
@@ -340,7 +445,14 @@ pip install --no-index --find-links .\wheelhouse -e .
 
 ## 9. 本地 LLM 接入
 
-代码假定昇腾 910B 上的模型服务提供 OpenAI 兼容的 `/v1/chat/completions` 接口。配置示例：
+代码假定昇腾 910B 上的模型服务提供 OpenAI 兼容的 `/v1/chat/completions` 接口。推荐直接运行一键脚本；它会加载 CANN/ATB 环境、检查依赖和模型目录，优先选择已安装的 vLLM，并将客户端配置写入运行目录：
+
+```bash
+bash scripts/start_llm.sh 8002
+# 或显式选择：LLM_BACKEND=vllm / mindie / transformers
+```
+
+也可以手工配置已有服务：
 
 ```powershell
 $env:SURVEILLANCE_LLM_MODE = "local_http"
@@ -362,9 +474,13 @@ $env:SURVEILLANCE_LLM_API_KEY = ""
 | GET | `/api/health` | 健康检查 |
 | GET | `/api/config` | 查询演示配置 |
 | GET | `/api/agents` | 查询协调Agent、角色能力和任务路由 |
+| GET | `/api/institutions` | 查询源数据中的机构名称与编码 |
+| GET | `/api/signal-catalog` | 查询信号目录21—28及规则状态 |
+| GET | `/api/school-governance` | 查询学校治理质量、症候趋势、分层活动和模型成果摘要 |
 | POST | `/api/runs` | 启动一次处理 |
 | GET | `/api/runs` | 查询运行记录 |
-| GET | `/api/risks` | 查询结构化风险结果 |
+| GET | `/api/risks` | 查询结构化风险结果；页面使用 `latest_only=true` 读取最新完成批次，也可用 `run_id` 查询指定批次 |
+| POST | `/api/signals/{signal_id}/review` | 开始核查或保存核查结论与任务 |
 | GET | `/docs` | FastAPI模式下查看接口文档 |
 
 `POST /api/runs`示例：

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict
+from urllib.parse import parse_qs, urlsplit
 
 from ..config import PROJECT_ROOT, load_config
 from ..storage import Storage
+from ..signal_catalog import catalog_document
 from . import _run_once
+from .institution_catalog import load_institution_catalog
+from .school_governance import school_governance_summary
 
 
 def _db_path() -> str:
@@ -19,11 +24,15 @@ _OPENAPI_SPEC = {
         "/api/health": {"get": {"summary": "健康检查", "responses": {"200": {"description": "ok"}}}},
         "/api/config": {"get": {"summary": "查询配置", "responses": {"200": {"description": "ok"}}}},
         "/api/agents": {"get": {"summary": "查询Agent角色", "responses": {"200": {"description": "ok"}}}},
+        "/api/institutions": {"get": {"summary": "查询机构名称与编号", "responses": {"200": {"description": "ok"}}}},
+        "/api/signal-catalog": {"get": {"summary": "查询信号目录21至28及规则状态", "responses": {"200": {"description": "ok"}}}},
+        "/api/school-governance": {"get": {"summary": "查询学校数据治理与模型聚合成果", "responses": {"200": {"description": "ok"}}}},
         "/api/runs": {
             "get": {"summary": "查询运行记录", "responses": {"200": {"description": "ok"}}},
             "post": {"summary": "启动一次处理", "responses": {"200": {"description": "ok"}}},
         },
         "/api/risks": {"get": {"summary": "查询风险结果", "responses": {"200": {"description": "ok"}}}},
+        "/api/signals/{signal_id}/review": {"post": {"summary": "更新信号核查状态", "responses": {"200": {"description": "ok"}}}},
     },
 }
 
@@ -38,6 +47,9 @@ class Handler:
         pass
 
     def dispatch(self, method: str, path: str, body: bytes):
+        parsed = urlsplit(path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
         if method == "GET" and path == "/api/health":
             return _json_response({"status": "ok"})
         if method == "GET" and path == "/api/config":
@@ -45,6 +57,12 @@ class Handler:
         if method == "GET" and path == "/api/agents":
             from ..agent import list_roles
             return _json_response({"agents": list_roles()})
+        if method == "GET" and path == "/api/institutions":
+            return _json_response({"institutions": load_institution_catalog()})
+        if method == "GET" and path == "/api/signal-catalog":
+            return _json_response(catalog_document())
+        if method == "GET" and path == "/api/school-governance":
+            return _json_response(school_governance_summary())
         if method == "GET" and path == "/api/runs":
             storage = Storage(_db_path())
             try:
@@ -54,7 +72,16 @@ class Handler:
         if method == "GET" and path == "/api/risks":
             storage = Storage(_db_path())
             try:
-                return _json_response({"risks": storage.query_signals()})
+                selected_run_id = str((query.get("run_id") or [""])[0]).strip()
+                latest_only = str((query.get("latest_only") or [""])[0]).lower() in {
+                    "1", "true", "yes", "on",
+                }
+                if latest_only and not selected_run_id:
+                    selected_run_id = storage.latest_run_id()
+                rows = storage.query_signals(selected_run_id) if selected_run_id else (
+                    [] if latest_only else storage.query_signals()
+                )
+                return _json_response({"risks": rows, "run_id": selected_run_id})
             finally:
                 storage.close()
         if method == "POST" and path == "/api/runs":
@@ -67,6 +94,31 @@ class Handler:
                 autonomy_stage=payload.get("autonomy_stage", None),
             ).get("summary", {})
             return _json_response(summary)
+        review_match = re.fullmatch(r"/api/signals/([^/]+)/review", path)
+        if method == "POST" and review_match:
+            payload = json.loads(body.decode("utf-8")) if body else {}
+            storage = Storage(_db_path())
+            try:
+                try:
+                    result = storage.update_signal_review(
+                        signal_id=review_match.group(1),
+                        action=str(payload.get("action", "")),
+                        result=str(payload.get("result", "")),
+                        reason=str(payload.get("reason", "")),
+                        reviewer=str(payload.get("reviewer", "")),
+                        task_name=str(payload.get("task_name", "")),
+                        task_owner=str(payload.get("task_owner", "")),
+                        task_due_at=str(payload.get("task_due_at", "")),
+                        observation_period=str(payload.get("observation_period", "")),
+                        task_status=str(payload.get("task_status", "")),
+                    )
+                    return _json_response(result)
+                except KeyError:
+                    return _json_response({"error": "signal_not_found"}, 404)
+                except ValueError as exc:
+                    return _json_response({"error": str(exc)}, 422)
+            finally:
+                storage.close()
         if method == "GET" and path == "/docs":
             return self._serve_static("/static/swagger-ui/swagger.html")
         if method == "GET" and path == "/openapi.json":

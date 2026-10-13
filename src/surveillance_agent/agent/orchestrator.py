@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..adapters import detect_adapter_from_file, map_syndromes, read_rows
+from ..adapters.yichang_focus import ingest_yichang_focus_bundle
 from ..aggregation import aggregate
 from ..config import PROJECT_ROOT, data_dir, load_config, resolve_source_file
 from ..domain import (
@@ -18,17 +19,18 @@ from ..domain import (
     SurveillanceEvent,
 )
 from ..models import build_detectors, fuse_alarms
+from ..signal_catalog import signal_catalog
+from ..signal_output import business_warning_level
 from ..storage import Storage
 from ..utils import append_jsonl, get_salt, hash_id, write_json
-from .explanation import llm_explain, template_explain, validate_draft
-from .llm import get_llm
+from .explanation import llm_explain_many, template_explain, validate_draft
+from .llm import get_llm, get_llm_settings
 from .messages import AgentMessage, new_correlation_id
 from .roles import ACTION_TO_ROLE, list_roles
 
 BASE_ORDER = ["ingest", "aggregate", "inject", "detect", "fuse", "explain", "audit", "persist"]
 
-_LEVEL_RANK = {"high": 3, "medium": 2, "watch": 1, "normal": 0}
-
+_LEVEL_RANK = {"high": 4, "medium": 3, "watch": 2, "near": 1, "normal": 0}
 
 class MultiAgentCoordinator:
     def __init__(
@@ -74,6 +76,7 @@ class MultiAgentCoordinator:
             "explanation_drafts": [],
             "explanations": [],
             "summary": {},
+            "node_times": {},
         }
 
     def _log_message(self, sender: str, receiver: str, task: str, payload: Dict, cid: str, kind: str) -> None:
@@ -110,8 +113,24 @@ class MultiAgentCoordinator:
         cid = new_correlation_id()
         self._log_message("supervisor", role, action, {"action": action}, cid, "request")
         method = getattr(self, f"_task_{action}")
-        result = method()
+        started = time.monotonic()
+        try:
+            result = method()
+        finally:
+            elapsed = time.monotonic() - started
+            timing = self.state["node_times"].setdefault(
+                action, {"calls": 0, "total_seconds": 0.0, "last_seconds": 0.0}
+            )
+            timing["calls"] += 1
+            timing["total_seconds"] = round(timing["total_seconds"] + elapsed, 3)
+            timing["last_seconds"] = round(elapsed, 3)
         self._log_message(role, "supervisor", action, {"summary": result}, cid, "response")
+        if action == "persist":
+            # persist itself is measured only after the first write; refresh the
+            # human-readable artifacts so they contain the complete timings.
+            self._build_summary()
+            write_json(str(self.run_dir / "summary.json"), self.state["summary"])
+            self._write_state()
         return result
 
     # ---------------- tasks ----------------
@@ -126,6 +145,19 @@ class MultiAgentCoordinator:
                 per_source[source] = {"status": "disabled"}
                 continue
             path = resolve_source_file(self.cfg, source)
+            if source_cfg.get("kind") == "yichang_focus_bundle":
+                if not os.path.isdir(str(path)):
+                    per_source[source] = {"status": "missing", "directory": str(path)}
+                    issues.append(f"missing_directory:{source}")
+                    continue
+                source_events, bundle_report = ingest_yichang_focus_bundle(
+                    str(path), self.salt, source_cfg.get("person_key_fields")
+                )
+                events.extend(source_events)
+                per_source[source] = bundle_report
+                if bundle_report.get("status") != "ok":
+                    issues.append(f"not_ready_for_alerting:{source}")
+                continue
             if not os.path.isfile(str(path)):
                 per_source[source] = {"status": "missing", "file": str(path)}
                 issues.append(f"missing_file:{source}")
@@ -227,6 +259,8 @@ class MultiAgentCoordinator:
                     syndrome=p.syndrome,
                     date=p.date,
                     count=max(p.count, 1) + int(p.count * magnitude),
+                    scope_label=p.scope_label,
+                    context=dict(p.context),
                 )
                 modified[id(p)] = injected
                 injections.append(
@@ -306,6 +340,8 @@ class MultiAgentCoordinator:
                             threshold=threshold,
                             detector=name,
                             alarm=alarm,
+                            scope_label=series[i].scope_label,
+                            context=dict(series[i].context),
                         )
                     )
 
@@ -320,6 +356,8 @@ class MultiAgentCoordinator:
 
         series_map = defaultdict(list)
         for dp in self.state["detector_points"]:
+            if dp.syndrome != "respiratory":
+                continue
             series_map[(dp.source, dp.scope_type, dp.scope_key, dp.syndrome)].append(dp)
 
         signals: List[RiskSignal] = []
@@ -333,6 +371,8 @@ class MultiAgentCoordinator:
                     "threshold": dp.threshold,
                     "alarm": dp.alarm,
                     "observed": dp.observed,
+                    "scope_label": dp.scope_label,
+                    "context": dp.context,
                 }
             dates = sorted(by_date.keys())
 
@@ -358,12 +398,33 @@ class MultiAgentCoordinator:
                 if sig is not None:
                     signals.append(sig)
 
+        self._link_related_signals(signals)
         self.state["risk_signals"] = signals
         write_json(
             str(self.run_dir / "risk_signals.json"),
             [s.to_dict() for s in signals],
         )
         return {"risk_signals": len(signals)}
+
+    @staticmethod
+    def _link_related_signals(signals: List[RiskSignal]) -> None:
+        for signal in signals:
+            p = signal.evidence.presentation
+            wanted = set(p.get("related_signal_codes", []))
+            if not wanted:
+                continue
+            related_ids = []
+            for candidate in signals:
+                if candidate.signal_id == signal.signal_id:
+                    continue
+                other = candidate.evidence.presentation
+                if str(other.get("signal_code")) not in wanted:
+                    continue
+                same_city = bool(p.get("city") and p.get("city") == other.get("city"))
+                same_place = bool(p.get("place_code") and p.get("place_code") == other.get("place_code"))
+                if same_city or same_place:
+                    related_ids.append(candidate.signal_id)
+            p["related_signal_ids"] = sorted(set(related_ids))
 
     def _build_signal(
         self,
@@ -386,8 +447,29 @@ class MultiAgentCoordinator:
             return None
         observed = next(iter(det_res.values()))["observed"]
         expected = next(iter(det_res.values()))["expected"]
+        try:
+            presentation = self._build_presentation(
+                source=source,
+                scope_type=scope_type,
+                scope_key=scope_key,
+                syndrome=syndrome,
+                date_value=rep_date,
+                dates=dates,
+                observed=observed,
+                expected=expected,
+                model_level=level,
+                detector_results=det_res,
+                model_version=model_version,
+                context=next((v.get("context", {}) for v in det_res.values() if v.get("context")), {}),
+            )
+        except ValueError:
+            # Reference catalog 21-28 has no generic fallback number. Unmatched
+            # monitoring series stay out of the formal signal list.
+            return None
         evidence = RiskEvidence(
-            signal_id=hash_id(f"{source}:{scope_key}:{syndrome}:{rep_date}", self.salt)[:16],
+            # The episode start remains stable while later runs append new days.
+            # This lets the same signal keep its ID and advance update_seq.
+            signal_id=hash_id(f"{source}:{scope_key}:{syndrome}:{min(dates)}", self.salt)[:16],
             source=source,
             scope_type=scope_type,
             scope_key=scope_key,
@@ -399,16 +481,247 @@ class MultiAgentCoordinator:
             thresholds={k: v["threshold"] for k, v in det_res.items()},
             alarms={k: v["alarm"] for k, v in det_res.items()},
             model_version=model_version,
+            scope_label=next((v.get("scope_label", "") for v in det_res.values() if v.get("scope_label")), ""),
             quality_limits=[],
             run_dates=sorted(dates),
+            presentation=presentation,
         )
         return RiskSignal(signal_id=evidence.signal_id, level=level, evidence=evidence)
 
+    def _build_presentation(
+        self,
+        source: str,
+        scope_type: str,
+        scope_key: str,
+        syndrome: str,
+        date_value: str,
+        dates: List[str],
+        observed: float,
+        expected: float,
+        model_level: str,
+        detector_results: Dict[str, Dict[str, Any]],
+        model_version: str,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Build the display fields agreed for focus-place warning signals."""
+        from datetime import date, datetime
+
+        yichang_setting = "养老机构" if context.get("care_resident_linked") else {
+            "outpatient": "医疗机构",
+            "inpatient": "医疗机构",
+            "elderly": "养老机构",
+            "school": "学校",
+        }.get(context.get("setting"), "重点场所")
+        setting_type = {
+            "hospital": "医疗机构",
+            "care_home": "养老机构",
+            "school": "学校",
+            "market": "农贸市场",
+            "yichang_focus": yichang_setting,
+        }.get(source, "重点场所")
+        monitored_targets = list(context.get("monitored_targets") or [])
+        if not monitored_targets:
+            monitored_targets = ["ARI" if syndrome == "respiratory" else "OTHER"]
+        from ..signal_catalog import classify_signal_code
+        signal_code = classify_signal_code(
+            setting_type,
+            scope_type,
+            syndrome,
+            regional_risk=bool(context.get("regional_risk")),
+        )
+        catalog = signal_catalog()[signal_code]
+        if signal_code == "28":
+            setting_type = "区域"
+        signal_name = catalog["name"]
+        related = {
+            "24": ["25"], "25": ["24"], "26": ["27", "28"],
+            "27": ["26", "28"], "28": ["26", "27"],
+        }.get(signal_code, [])
+        denominator = context.get("population_denominator")
+        try:
+            denominator = int(float(denominator)) if denominator not in (None, "") else None
+        except (TypeError, ValueError):
+            denominator = None
+        evidence_items = [
+            {
+                "name": "监测事件数", "value": round(observed, 4), "unit": "例",
+                "role": "observed", "denominator": denominator, "comparison_value": None,
+                "source": catalog["source_details"], "window": f"{min(dates)} 至 {max(dates)}",
+            },
+            {
+                "name": "模型预期值", "value": round(expected, 4), "unit": "例",
+                "role": "expected", "denominator": None, "comparison_value": None,
+                "source": "历史序列异常检测模型", "window": date_value,
+            },
+        ]
+        if expected > 0:
+            evidence_items.append({
+                "name": "观察/预期比", "value": round(observed / expected, 4), "unit": "倍",
+                "role": "ratio", "denominator": round(expected, 4),
+                "numerator": round(observed, 4), "comparison_value": 1.0,
+                "source": "由监测事件数和模型预期值计算", "window": date_value,
+            })
+        for detector, result in sorted(detector_results.items()):
+            evidence_items.append({
+                "name": detector.upper(),
+                "value": round(float(result.get("score", 0.0)), 4),
+                "threshold_value": round(float(result.get("threshold", 0.0)), 4),
+                "unit": "模型分值",
+                "denominator": None,
+                "comparison_value": None,
+                "alarm": bool(result.get("alarm")),
+                "role": "detector",
+                "source": "异常检测模型",
+                "window": date_value,
+            })
+
+        latest = str(context.get("latest_update_time") or context.get("latest_event_date") or date_value)
+        for item in evidence_items:
+            item["data_updated_at"] = latest
+        update_date = None
+        try:
+            update_date = date.fromisoformat(latest[:10])
+        except ValueError:
+            try:
+                year, week = latest.split("-W", 1)
+                update_date = date.fromisocalendar(int(year), int(week), 7)
+            except (ValueError, TypeError):
+                pass
+        expected_days = int(
+            self.cfg.get("scenarios", {}).get(source, {}).get(
+                "expected_update_days", 31 if source == "school" else 7 if source == "care_home" else 1
+            )
+        )
+        delay_days = max(0, (date.today() - update_date).days - expected_days) if update_date else None
+        delayed = delay_days is not None and delay_days > 0
+        place_name = str(context.get("place_name") or "").strip()
+        if not place_name:
+            place_name = scope_key if scope_type == "org" else str(context.get("city") or context.get("province") or scope_key)
+        place_code = str(
+            context.get("area_code", "") if scope_type in {"province", "region"}
+            else context.get("place_code", "")
+        )
+        missing_fields = [
+            name for name, value in {
+                "行政区划编码": context.get("area_code", ""),
+                "场所编号": place_code,
+                "场所名称或区域名称": place_name,
+                "详细地址": context.get("address", context.get("location", "")),
+            }.items() if not value
+        ]
+        data_issues = []
+        if delayed:
+            data_issues.append(f"数据延迟 {delay_days} 天")
+        if missing_fields:
+            data_issues.append("缺少：" + "、".join(missing_fields))
+        data_status = "延迟" if delayed else "不完整" if missing_fields else "正常"
+        warning_level = business_warning_level(model_level, self.cfg)
+        level_mapping_status = self.cfg.get("signal_output", {}).get(
+            "level_mapping_status", "unapproved"
+        )
+
+        if source == "school":
+            monitoring_window = "教学日：" + "、".join(sorted(dates))
+        elif date_value.startswith(tuple(str(year) for year in range(2000, 2101))) and "-W" in date_value:
+            monitoring_window = f"监测周：{min(dates)} 至 {max(dates)}"
+        else:
+            monitoring_window = (
+                f"{min(dates)} 00:00:00 至 {max(dates)} 23:59:59；自然日"
+            )
+
+        return {
+            "generated_at": self.state.get("started_at") or datetime.now().isoformat(timespec="seconds"),
+            "province": context.get("province", ""),
+            "city": context.get("city", ""),
+            "district": context.get("district", ""),
+            "setting_type": setting_type,
+            "place_name": place_name,
+            "location": context.get("location", ""),
+            "address": context.get("address", context.get("location", "")),
+            "area_code": context.get("area_code", ""),
+            "analysis_unit": context.get("analysis_unit", ""),
+            "place_code": place_code,
+            "is_regional_aggregate": scope_type in {"province", "region"},
+            "contributing_places": context.get("contributing_places", []),
+            "contributing_place_count": context.get("contributing_place_count", 0),
+            "signal_code": signal_code,
+            "signal_catalog_name": catalog["name"],
+            "catalog_setting_code": catalog["setting_code"],
+            "catalog_type_code": catalog["warning_type"],
+            "catalog_source_type": catalog["source_type"],
+            "catalog_boundary": catalog["boundary"],
+            "catalog_explanation": catalog["explanation"],
+            "warning_type": "风险预警" if catalog["warning_type"] == "R" else "苗头预警",
+            "warning_level": warning_level,
+            "model_severity": model_level,
+            "warning_level_scheme": (
+                "模拟展示映射，不作为正式业务分级" if level_mapping_status == "demo"
+                else "沿用前期暂行分级，待业务确认" if level_mapping_status == "provisional"
+                else "业务等级映射已批准" if level_mapping_status == "approved"
+                else "业务等级映射尚未核定，保持待研判"
+            ),
+            "signal_name": signal_name,
+            "verification_status": "待核查",
+            "verification_result": "",
+            "record_status": "ACTIVE",
+            "update_seq": 1,
+            "monitored_targets": monitored_targets,
+            "monitored_target": ";".join(monitored_targets),
+            "source_type": catalog["source_type"],
+            "monitoring_window": monitoring_window,
+            "window_start": min(dates),
+            "window_end": max(dates),
+            "window_basis": "自然日连续窗口" if source != "school" else "教学日窗口（休假日剔除）",
+            "key_indicator": (
+                f"监测值 {observed:g} 例 / 监测对象 {denominator:g} 人，模型预期 {expected:g} 例"
+                if denominator else f"监测值 {observed:g} 例，模型预期 {expected:g} 例"
+            ),
+            "evidence_items": evidence_items,
+            "source_details": catalog["source_details"],
+            "rule_id": f"RULE-{signal_code}-ENSEMBLE",
+            "rule_version": model_version,
+            "rule_status": catalog["rule_status"],
+            "raw_rule": catalog["raw_rule"],
+            "verification_hints": catalog["verification_hints"],
+            "verification_hint": "；".join(catalog["verification_hints"]),
+            "comparison_policy": (
+                "仅纳入教学日，周末、寒暑假和节假日不进入基线比较"
+                if source == "school"
+                else "按连续监测周期与历史基线比较"
+            ),
+            "identity_linkage": (
+                "已通过不可逆脱敏身份键关联，医疗病例已归并至对应养老机构"
+                if context.get("care_resident_linked")
+                else "未发现可用于跨机构归并的共享不可逆脱敏身份键"
+                if setting_type == "养老机构"
+                else "不适用"
+            ),
+            "data_update_rule": (
+                f"每日固定于上班时段 {self.cfg.get('scenarios', {}).get(source, {}).get('scheduled_update_time')} 更新"
+                if source == "market"
+                else f"预期每 {expected_days} 天至少更新一次"
+            ),
+            "data_updated_at": latest,
+            "expected_update_interval_days": expected_days,
+            "data_delay_days": delay_days,
+            "data_status": data_status,
+            "data_issues": data_issues,
+            "report_time": "",
+            "related_signal_codes": related,
+            "related_signal_ids": [],
+            "event_link": "",
+            "missing_fields": missing_fields,
+            "tasks": [],
+            "task_due_at": "",
+            "observation_period": "",
+            "map_longitude": context.get("longitude", ""),
+            "map_latitude": context.get("latitude", ""),
+        }
+
     def _task_explain(self) -> Dict:
-        drafts = []
-        for sig in self.state["risk_signals"]:
-            draft = llm_explain(sig.evidence, sig.level)
-            drafts.append(draft)
+        started = time.monotonic()
+        items = [(sig.evidence, sig.level) for sig in self.state["risk_signals"]]
+        drafts = llm_explain_many(items)
         self.state["explanation_drafts"] = drafts
         write_json(str(self.run_dir / "explanation_drafts.json"), drafts)
         llm_generated = sum(1 for d in drafts if d.get("draft_source") == "llm")
@@ -418,7 +731,12 @@ class MultiAgentCoordinator:
             "llm_generated": llm_generated,
             "template_fallback": len(drafts) - llm_generated,
             "llm_parse_success_rate": round(llm_generated / len(drafts), 4) if drafts else 0.0,
+            "wall_seconds": round(time.monotonic() - started, 3),
         }
+        settings = get_llm_settings()
+        if settings:
+            stats["backend"] = settings.get("backend", "openai")
+            stats["concurrency"] = settings.get("concurrency", 1)
         latencies = [d["latency_ms"] for d in drafts if d.get("latency_ms") is not None]
         if latencies:
             lat_sorted = sorted(latencies)
@@ -443,6 +761,7 @@ class MultiAgentCoordinator:
             ok, errors = validate_draft(draft, sig.evidence)
             text = draft.get("text", "")
             used_fallback = False
+            explanation_source = draft.get("draft_source", "template")
             if not ok:
                 rejected.append(signal_id)
                 fallback = template_explain(sig.evidence, sig.level)
@@ -452,6 +771,7 @@ class MultiAgentCoordinator:
                     ok = True
                     errors = []
                     used_fallback = True
+                    explanation_source = "template_fallback"
                     rejected = [r for r in rejected if r != signal_id]
             results.append(
                 {
@@ -461,6 +781,7 @@ class MultiAgentCoordinator:
                     "text": text,
                     "used_fallback": used_fallback,
                     "draft_source": draft.get("draft_source", ""),
+                    "explanation_source": explanation_source,
                 }
             )
 
@@ -468,6 +789,7 @@ class MultiAgentCoordinator:
             for r in results:
                 if r["signal_id"] == sig.signal_id:
                     sig.explanation = r["text"] if r["passed"] else ""
+                    sig.explanation_source = r["explanation_source"] if r["passed"] else "human_review"
 
         self.state["explanations"] = results
         write_json(str(self.run_dir / "explanations.json"), results)
@@ -483,6 +805,7 @@ class MultiAgentCoordinator:
             draft = template_explain(sig.evidence, sig.level)
             ok, _ = validate_draft(draft, sig.evidence)
             sig.explanation = draft["text"] if ok else ""
+            sig.explanation_source = "template_revision" if ok else "human_review"
             drafts.append(draft)
         self.state["explanation_drafts"] = drafts
         write_json(str(self.run_dir / "explanation_drafts.json"), drafts)
@@ -526,7 +849,12 @@ class MultiAgentCoordinator:
             "autonomy_stage": self.autonomy_stage,
             "use_langgraph": self.use_langgraph,
             "quality": self.state["quality"].get("total_events", 0),
+            "source_readiness": {
+                source: detail.get("status", "unknown")
+                for source, detail in self.state["quality"].get("per_source", {}).items()
+            },
             "explanation": self.state.get("explanation_stats", {}),
+            "node_times": self.state.get("node_times", {}),
         }
 
     def _write_state(self) -> None:
@@ -536,7 +864,7 @@ class MultiAgentCoordinator:
             "summary": self.state["summary"],
             "quality": self.state["quality"],
             "injection_manifest": self.state["injection_manifest"],
-            "node_times": {},
+            "node_times": self.state.get("node_times", {}),
         }
         write_json(str(self.run_dir / "state.json"), state_out)
 

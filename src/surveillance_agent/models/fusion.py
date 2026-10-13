@@ -3,22 +3,31 @@ from __future__ import annotations
 from typing import Dict, List, Tuple
 
 
-def fuse_alarms(detector_results: Dict[str, Dict], watch_ratio: float = 0.7) -> str:
-    alarm_count = 0
-    near_threshold = False
-    for name, res in detector_results.items():
-        if res.get("alarm", False):
-            alarm_count += 1
-        else:
-            score = res.get("score", 0.0)
-            threshold = res.get("threshold", 1.0)
-            if threshold > 0 and score / threshold >= watch_ratio:
-                near_threshold = True
+WARNING_DETECTORS = ("ewma", "cusum", "shewhart")
 
-    if alarm_count >= 2:
+
+def fuse_alarms(detector_results: Dict[str, Dict], watch_ratio: float = 0.7) -> str:
+    """Map the three warning models to the provisional colour levels."""
+    results = {
+        name: detector_results[name]
+        for name in WARNING_DETECTORS
+        if name in detector_results
+    }
+    alarm_count = sum(bool(res.get("alarm", False)) for res in results.values())
+
+    if alarm_count == 3:
         return "high"
-    if alarm_count == 1:
+    if alarm_count == 2:
         return "medium"
-    if near_threshold:
+    if alarm_count == 1:
         return "watch"
+
+    near_threshold = any(
+        not res.get("alarm", False)
+        and float(res.get("threshold", 0.0)) > 0
+        and float(res.get("score", 0.0)) / float(res["threshold"]) >= watch_ratio
+        for res in results.values()
+    )
+    if near_threshold:
+        return "near"
     return "normal"

@@ -29,6 +29,8 @@ class AggregatePoint:
     syndrome: str
     date: str
     count: int
+    scope_label: str = ""
+    context: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -47,6 +49,8 @@ class DetectorPoint:
     threshold: float
     detector: str
     alarm: bool
+    scope_label: str = ""
+    context: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -66,8 +70,10 @@ class RiskEvidence:
     thresholds: Dict[str, float]
     alarms: Dict[str, bool]
     model_version: str
+    scope_label: str = ""
     quality_limits: List[str] = field(default_factory=list)
     run_dates: List[str] = field(default_factory=list)
+    presentation: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -79,6 +85,7 @@ class RiskSignal:
     level: str
     evidence: RiskEvidence
     explanation: str = ""
+    explanation_source: str = ""
     requires_human_review: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
@@ -87,5 +94,6 @@ class RiskSignal:
             "level": self.level,
             "evidence": self.evidence.to_dict(),
             "explanation": self.explanation,
+            "explanation_source": self.explanation_source,
             "requires_human_review": self.requires_human_review,
         }

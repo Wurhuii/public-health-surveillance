@@ -18,7 +18,10 @@ def load_config(path: str = "") -> Dict[str, Any]:
     if _loaded:
         return copy.deepcopy(_loaded)
 
-    cfg_path = Path(path) if path else DEFAULT_CONFIG_PATH
+    configured_default = os.environ.get("SURVEILLANCE_CONFIG", "")
+    cfg_path = Path(path or configured_default) if (path or configured_default) else DEFAULT_CONFIG_PATH
+    if not cfg_path.is_absolute():
+        cfg_path = PROJECT_ROOT / cfg_path
     if not cfg_path.exists():
         cfg_path = PROJECT_ROOT / "config" / "default.json"
 
