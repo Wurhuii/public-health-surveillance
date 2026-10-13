@@ -325,6 +325,12 @@ bash scripts/start_all.sh
 5. 把治理、网页、LLM和流水线日志写入 `var/`；
 6. 打印VS Code端口转发、状态检查和停止命令。
 
+完成学校治理后，网页顶栏的“学校治理成果”会读取
+`data_governance/output/school_model/`。快速模式展示模块01—05的数据质量、
+症候事件、趋势和班级/年级/学校聚合；完整模式还展示模块06—16的动态基线、
+集中性探测、顺序检测、候选事件、进展风险与动态分级状态。页面仅返回聚合结果，
+不返回学生身份字段或逐条原始记录。首次读取Excel成果约需数秒，随后按文件时间缓存。
+
 查看状态或停止后台服务：
 
 ```bash
@@ -470,6 +476,7 @@ $env:SURVEILLANCE_LLM_API_KEY = ""
 | GET | `/api/agents` | 查询协调Agent、角色能力和任务路由 |
 | GET | `/api/institutions` | 查询源数据中的机构名称与编码 |
 | GET | `/api/signal-catalog` | 查询信号目录21—28及规则状态 |
+| GET | `/api/school-governance` | 查询学校治理质量、症候趋势、分层活动和模型成果摘要 |
 | POST | `/api/runs` | 启动一次处理 |
 | GET | `/api/runs` | 查询运行记录 |
 | GET | `/api/risks` | 查询结构化风险结果；页面使用 `latest_only=true` 读取最新完成批次，也可用 `run_id` 查询指定批次 |

@@ -8,6 +8,7 @@ from ..storage import Storage
 from ..signal_catalog import catalog_document
 from . import _run_once
 from .institution_catalog import load_institution_catalog
+from .school_governance import school_governance_summary
 
 
 def _db_path() -> str:
@@ -64,6 +65,10 @@ def create_app():
     @app.get("/api/signal-catalog")
     def signal_catalog_endpoint():
         return catalog_document()
+
+    @app.get("/api/school-governance")
+    def school_governance_endpoint():
+        return school_governance_summary()
 
     @app.post("/api/runs")
     def start_run(body: Dict[str, Any]):

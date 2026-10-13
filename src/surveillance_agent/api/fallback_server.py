@@ -10,6 +10,7 @@ from ..storage import Storage
 from ..signal_catalog import catalog_document
 from . import _run_once
 from .institution_catalog import load_institution_catalog
+from .school_governance import school_governance_summary
 
 
 def _db_path() -> str:
@@ -25,6 +26,7 @@ _OPENAPI_SPEC = {
         "/api/agents": {"get": {"summary": "查询Agent角色", "responses": {"200": {"description": "ok"}}}},
         "/api/institutions": {"get": {"summary": "查询机构名称与编号", "responses": {"200": {"description": "ok"}}}},
         "/api/signal-catalog": {"get": {"summary": "查询信号目录21至28及规则状态", "responses": {"200": {"description": "ok"}}}},
+        "/api/school-governance": {"get": {"summary": "查询学校数据治理与模型聚合成果", "responses": {"200": {"description": "ok"}}}},
         "/api/runs": {
             "get": {"summary": "查询运行记录", "responses": {"200": {"description": "ok"}}},
             "post": {"summary": "启动一次处理", "responses": {"200": {"description": "ok"}}},
@@ -59,6 +61,8 @@ class Handler:
             return _json_response({"institutions": load_institution_catalog()})
         if method == "GET" and path == "/api/signal-catalog":
             return _json_response(catalog_document())
+        if method == "GET" and path == "/api/school-governance":
+            return _json_response(school_governance_summary())
         if method == "GET" and path == "/api/runs":
             storage = Storage(_db_path())
             try:
