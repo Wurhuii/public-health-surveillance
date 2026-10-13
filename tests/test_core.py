@@ -286,6 +286,23 @@ class TestModels(unittest.TestCase):
             self.assertGreater(inj["injected"], inj["original"])
 
 
+class TestStorage(unittest.TestCase):
+    def test_latest_run_id_uses_completed_run_even_when_it_has_no_signals(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from surveillance_agent.storage import Storage
+
+        with TemporaryDirectory() as temp_dir:
+            storage = Storage(str(Path(temp_dir) / "test.db"))
+            try:
+                storage.save_run("run-old", "2026-10-13T08:00:00", "2026-10-13T08:01:00", "end", 1, False, {})
+                storage.save_run("run-new", "2026-10-13T09:00:00", "2026-10-13T09:01:00", "end", 1, False, {})
+                self.assertEqual(storage.latest_run_id(), "run-new")
+                self.assertEqual(storage.query_signals(storage.latest_run_id()), [])
+            finally:
+                storage.close()
+
+
 class TestExplanation(unittest.TestCase):
     def _evidence(self):
         return RiskEvidence(

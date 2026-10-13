@@ -275,7 +275,7 @@ python scripts/llm_server.py [选项]     # 本地 LLM 推理服务
 
 ## 6. HTTP API 与本地页面
 
-启动 `serve` 后浏览器访问 `http://127.0.0.1:8080`。页面支持：查看风险信号表、点击"证据"展开检测器分数/阈值/模型版本/质量限制、一键触发运行（注入或不注入）。
+启动 `serve` 后浏览器访问 `http://127.0.0.1:8080`。页面默认只展示最近一次已完成运行的信号并显示批次编号；支持查看风险信号表、点击"证据"展开检测器分数/阈值/模型版本/质量限制、一键触发运行（注入或不注入）。
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
@@ -285,7 +285,7 @@ python scripts/llm_server.py [选项]     # 本地 LLM 推理服务
 | GET | `/api/agents` | 查询 Agent 角色与能力 |
 | POST | `/api/runs` | 启动一次处理 |
 | GET | `/api/runs` | 查询运行记录 |
-| GET | `/api/risks` | 查询结构化风险结果 |
+| GET | `/api/risks` | 查询结构化风险结果；支持 `latest_only=true` 与 `run_id` |
 | GET | `/docs` `/openapi.json` | 接口文档（FastAPI 模式；回退服务器提供精简版） |
 
 `POST /api/runs` 请求体示例：

@@ -230,6 +230,15 @@ class Storage:
             attach_report_preview(row)
         return rows
 
+    def latest_run_id(self) -> str:
+        """Return the most recently completed run, including zero-signal runs."""
+        row = self.conn.execute(
+            "SELECT run_id FROM runs "
+            "WHERE finished_at IS NOT NULL AND finished_at <> '' "
+            "ORDER BY finished_at DESC, started_at DESC, run_id DESC LIMIT 1"
+        ).fetchone()
+        return str(row["run_id"]) if row else ""
+
     def _get_review(self, signal_id: str) -> Dict[str, Any]:
         review = self.conn.execute(
             "SELECT * FROM signal_reviews WHERE signal_id = ?", (signal_id,)

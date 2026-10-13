@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Dict
+from urllib.parse import parse_qs, urlsplit
 
 from ..config import PROJECT_ROOT, load_config
 from ..storage import Storage
@@ -44,6 +45,9 @@ class Handler:
         pass
 
     def dispatch(self, method: str, path: str, body: bytes):
+        parsed = urlsplit(path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
         if method == "GET" and path == "/api/health":
             return _json_response({"status": "ok"})
         if method == "GET" and path == "/api/config":
@@ -64,7 +68,16 @@ class Handler:
         if method == "GET" and path == "/api/risks":
             storage = Storage(_db_path())
             try:
-                return _json_response({"risks": storage.query_signals()})
+                selected_run_id = str((query.get("run_id") or [""])[0]).strip()
+                latest_only = str((query.get("latest_only") or [""])[0]).lower() in {
+                    "1", "true", "yes", "on",
+                }
+                if latest_only and not selected_run_id:
+                    selected_run_id = storage.latest_run_id()
+                rows = storage.query_signals(selected_run_id) if selected_run_id else (
+                    [] if latest_only else storage.query_signals()
+                )
+                return _json_response({"risks": rows, "run_id": selected_run_id})
             finally:
                 storage.close()
         if method == "POST" and path == "/api/runs":

@@ -85,10 +85,16 @@ def create_app():
             storage.close()
 
     @app.get("/api/risks")
-    def risks():
+    def risks(latest_only: bool = False, run_id: str = ""):
         storage = Storage(_db_path())
         try:
-            return {"risks": storage.query_signals()}
+            selected_run_id = run_id.strip()
+            if latest_only and not selected_run_id:
+                selected_run_id = storage.latest_run_id()
+            rows = storage.query_signals(selected_run_id) if selected_run_id else (
+                [] if latest_only else storage.query_signals()
+            )
+            return {"risks": rows, "run_id": selected_run_id}
         finally:
             storage.close()
 
